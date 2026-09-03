@@ -1,5 +1,9 @@
 from datetime import datetime
+from .schemas import ManyHypothesesAgSchema, HypothesisAgSchema
+from ...config import Config
 
+cfg = Config()
+logger = cfg.get_logger('PromptLogger')
 
 class PromptClass:
     def __init__(self):
@@ -28,7 +32,7 @@ Instructions:
 
 
 class ResearchPlannerAgPrompt(PromptClass):
-    def __init__(self, question, hypothesis=[], tools=[]):
+    def __init__(self, question, hypothesis:ManyHypothesesAgSchema=[], tools=[]):
             super().__init__()
             self.date = datetime.now().strftime("%Y-%m-%d")
             self.question = question
@@ -86,7 +90,7 @@ HYPOTHESES
 {self.hypothesis}
 
 
-CURRENT UNVERIFIED EVIDENCE
+CURRENT EXPECTED EVIDENCE
 {self.evidence}
 
 
@@ -97,22 +101,27 @@ KNOWN GAPS
 AVAILABLE RESEARCH TOOLS AND THEIR SIGNATURE
 {self.tools}
 """
-    def get_formatted_hypothesis(self, hs):
+            logger.debug(f"User Prompt for PlannerAgent:\n{self.user_prompt}")
+    def get_formatted_hypothesis(self, hs:ManyHypothesesAgSchema):
         """Takes a structured input and returns in paragraphs the hypothesis and condidence"""
         result = ''
-        for idx, h in enumerate(hs):
-            result+=f"H{idx}\nHypothesis:{h.hypothesis}\nConfidence:{h.confidence}\n"
+        for _, h in enumerate(hs): 
+            result+=f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
         return result
 
-    def get_formatted_evidence(self, hs):
-        """Takes a structured input and returns in paragraphs the evidence part per hypothesis"""
+    def get_formatted_evidence(self, hs:ManyHypothesesAgSchema):
+        """Takes a structured input and returns in paragraphs the supporting and weakening evidence expectations that are part per hypothesis"""
         result = ''
-        for idx, h in enumerate(hs):
-            evidence = ''
-            for idx, e in enumerate(h.evidence):
-                evidence += f"Evidence {idx}: {e}"
+        for _, h in enumerate(hs):
+            supporting_predictions = ''
+            for idx, e in enumerate(h.supporting_predictions):
+                supporting_predictions += f"Supporting Statement {idx} for Hypothesis {h.id}: {e}"
+            weakening_predictions = ''
+            for idx, e in enumerate(h.weakening_predictions):
+                weakening_predictions += f"Weakening Statement {idx} for Hypothesis {h.id}: {e}"
             # now append that string to result
-            result+=f"Evidence for H{idx}\n{evidence}\n"
+            result+=f"Predicted Evidence for Hypothesis {h.id}\n{supporting_predictions}\n{weakening_predictions}\n"
+            
         return result
     
     

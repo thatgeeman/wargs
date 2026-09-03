@@ -1,8 +1,10 @@
 import uuid
+import time
 from pydantic import BaseModel
 
 from ..agent import HypothesisAgent, ManyHypothesesAgSchema, ManyResearchPlannerAgSchema, ResearchPlanner
 from ...config import Config
+from ...helpers import run_with_timeout
 from ...tools.store import WebSearch
 
 cfg = Config()
@@ -22,6 +24,7 @@ class InvestigationState:
         self.tools = [WebSearch()]
         self.current_step = 0
         self.max_steps = 10  # Default max steps, can be adjusted as needed
+        self.timeout_perstep_s = 60
         logger.info(f"{self.name}: Initialized with question: {self.question}")
 
     def generate_hypotheses(self):
@@ -40,7 +43,7 @@ class InvestigationState:
             self.state = "ERROR"
         self.current_step += 1
 
-    def research_planner(self):
+    def generate_research_plan(self):
         # Placeholder for the main investigation logic
         if self.current_step >= self.max_steps:
             self.state = "COMPLETED"
@@ -57,10 +60,13 @@ class InvestigationState:
         self.current_step += 1
 
 
-    def run_order(self):
+    def run_order(self): 
         if self.state == "INIT":
-            self.generate_hypotheses()
-            self.research_planner()
+            try:
+                run_with_timeout(self.generate_hypotheses, self.timeout_perstep_s)
+                run_with_timeout(self.generate_research_plan, self.timeout_perstep_s)
+            except TimeoutError:
+                logger.error(f"Investigation timed out.")
 
 
 if __name__ == "__main__":

@@ -26,11 +26,12 @@ class Model(ModelConfig):
         self.system_prompt = system_prompt
         self.reasoning_effort = reasoning_effort
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.timeout_s = 60
 
     def call(self, prompt: str, output_schema: dict = None):
         if output_schema:
             logger.debug(f"Calling model '{self.model_name}' with output schema: {output_schema}") 
-
+        response = None
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
@@ -38,14 +39,22 @@ class Model(ModelConfig):
             logger.warning("No system prompt provided. Proceeding without it.")
         messages.append({"role": "user", "content": prompt})
 
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens, 
-            reasoning_effort=self.reasoning_effort, 
-            response_format=output_schema,
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens, 
+                reasoning_effort=self.reasoning_effort, 
+                response_format=output_schema,
+                timeout=self.timeout_s,
+            )
+        except TimeoutError:
+            logger.error(f"Model call timed out (max: {self.timeout_s})")
+            raise TimeoutError
+        except Exception as e:
+            logger.error(f"Model call exception: {e}")
+            raise e
         return response 
 
 if __name__ == "__main__":

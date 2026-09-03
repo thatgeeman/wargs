@@ -100,11 +100,12 @@ class HypothesisAgent(Agent):
 
 
 class ResearchPlanner(Agent):
-    def __init__(self, input:str, hypothesis:list=[], tools:list=[]):
+    def __init__(self, input:str, hypothesis:ManyHypothesesAgSchema=[], tools:list=[]):
         self.instance_id = uuid.uuid4()
         self.name = "ResearchPlannerAgent_" + str(self.instance_id)
         self.allowed_tools = tools
         self.prompts = ResearchPlannerAgPrompt(question=input, hypothesis=hypothesis, tools=self.allowed_tools)
+        print(self.prompts)
         self.output_schema = ManyResearchPlannerAgSchema() 
         super().__init__(self.name, input, self.output_schema, self.allowed_tools) 
 

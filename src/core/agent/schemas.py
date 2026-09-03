@@ -1,9 +1,11 @@
 from pydantic import BaseModel, Field 
 
 class HypothesisAgSchema(BaseModel): 
+    id: int = Field(..., ge=1, description="Integer ID to identify this hypothesis")
     hypothesis: str = Field(..., description="A single hypothesis that could explain the phenomenon")
-    confidence: float = Field(..., ge=0, le=1)
-    evidence: list[str] = Field(default_factory=list, description="Evidences that supports the hypothesis")
+    confidence: float = Field(..., description="Prior confidence before verifying the statement", ge=0, le=1)
+    supporting_predictions: list[str] = Field(default_factory=list, description="Knowledge (expectations) that would support the hypothesis")
+    weakening_predictions: list[str] = Field(default_factory=list, description="Knowledge (expectations) that would weaken the hypothesis")
 
 class ManyHypothesesAgSchema(BaseModel):
     hypotheses: list[HypothesisAgSchema] = Field(default_factory=list, description="A list of hypotheses that could explain the phenomenon")
@@ -15,7 +17,7 @@ class ToolSchema(BaseModel):
 class ResearchPlannerAgSchema(BaseModel): 
     action: str = Field(..., description="What exactly should we investigate?")
     rationale: str = Field(..., description="Rationale for chosing this action")
-    hypotheses_targeted: list[str] = Field(default_factory=list, description="Which of the hypotheses are targetted by this action (Can provide multiple - use short forms: [H1, H2])")
+    hypotheses_targeted: list[str] = Field(default_factory=list, description="Which of the hypotheses are targetted by this action (Can provide multiple - use hypothesis IDs: [1, 2])")
     supporting_result:  str = Field(..., description="What kind of evidence, if discovered, would make us more confident that this hypothesis is correct?")
     weakening_result: str = Field(..., description="What kind of evidence, if discovered, would make us less confident that this hypothesis is correct?")
     priority: float = Field(..., ge=0, le=1)

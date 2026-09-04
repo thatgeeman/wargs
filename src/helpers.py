@@ -1,8 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from .config import Config 
+
+from .config import Config
 
 cfg = Config()
-logger = cfg.get_logger('HelpersLogger')
+logger = cfg.get_logger("HelpersLogger")
+
 
 def run_with_timeout(func, timeout, *args, **kwargs):
     func_name = func.__name__

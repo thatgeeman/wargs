@@ -1,8 +1,15 @@
-from .agent import HypothesisAgent, ResearchPlanner
-from .schemas import ManyHypothesesAgSchema, ManyResearchPlannerAgSchema
+from .agent import HypothesisAgent, ResearchPlanner, ResearchTask
+from .schemas import (
+    ManyHypothesesAgSchema,
+    ManyResearchPlannerAgSchema,
+    ManyResearchTaskAgSchema,
+)
+
 __all__ = [
     "HypothesisAgent",
-    "ManyHypothesesAgSchema", 
-    "ResearchPlanner", 
-    "ManyResearchPlannerAgSchema"
+    "ManyHypothesesAgSchema",
+    "ManyResearchPlannerAgSchema",
+    "ManyResearchTaskAgSchema",
+    "ResearchPlanner",
+    "ResearchTask",
 ]

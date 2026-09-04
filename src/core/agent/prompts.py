@@ -1,19 +1,26 @@
 from datetime import datetime
-from .schemas import ManyHypothesesAgSchema, HypothesisAgSchema
+
+from pydantic import BaseModel
+
 from ...config import Config
+from .schemas import (
+    ManyHypothesesAgSchema,
+)
 
 cfg = Config()
-logger = cfg.get_logger('PromptLogger')
+logger = cfg.get_logger("PromptLogger")
+
 
 class PromptClass:
     def __init__(self):
         self.date = datetime.now().strftime("%Y-%m-%d")
         self.system_prompt = "You are a helpful assistant."
-        self.user_prompt = "Please provide a response to the following input: {input_text}"
+        self.user_prompt = (
+            "Please provide a response to the following input: {input_text}"
+        )
 
 
-
-class HypothesisAgPrompt(PromptClass): 
+class HypothesisAgPrompt(PromptClass):
     def __init__(self, input_text):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
@@ -32,14 +39,13 @@ Instructions:
 
 
 class ResearchPlannerAgPrompt(PromptClass):
-    def __init__(self, question, hypothesis:ManyHypothesesAgSchema=[], tools=[]):
-            super().__init__()
-            self.date = datetime.now().strftime("%Y-%m-%d")
-            self.question = question
-            self.tools = [f"{t.name}: {t.schema()}" for t in tools] if len(tools)>0 else 'None Provided'
-            self.hypothesis = self.get_formatted_hypothesis(hypothesis)
-            self.evidence = self.get_formatted_evidence(hypothesis)
-            self.system_prompt = f"""
+    def __init__(self, question, hypothesis: ManyHypothesesAgSchema = []):
+        super().__init__()
+        self.date = datetime.now().strftime("%Y-%m-%d")
+        self.question = question
+        self.hypothesis = self.get_formatted_hypothesis(hypothesis)
+        self.evidence = self.get_formatted_evidence(hypothesis)
+        self.system_prompt = f"""
 You are the Research Planner Agent in an autonomous investigation system.
 Today's date is {self.date}. 
 Your responsibility is to determine the next best research actions for the investigation.
@@ -79,7 +85,7 @@ Actively look for research that could disprove or weaken it.
 
 Return only the requested structured output.
     """
-            self.user_prompt = f"""
+        self.user_prompt = f"""
 CURRENT INVESTIGATION
 
 Question:
@@ -96,32 +102,132 @@ CURRENT EXPECTED EVIDENCE
 
 KNOWN GAPS
 (Your task to identify)
-
-
-AVAILABLE RESEARCH TOOLS AND THEIR SIGNATURE
-{self.tools}
 """
-            logger.debug(f"User Prompt for PlannerAgent:\n{self.user_prompt}")
-    def get_formatted_hypothesis(self, hs:ManyHypothesesAgSchema):
+        logger.debug(f"User Prompt for PlannerAgent:\n{self.user_prompt}")
+
+    def get_formatted_hypothesis(self, hs: ManyHypothesesAgSchema):
         """Takes a structured input and returns in paragraphs the hypothesis and condidence"""
-        result = ''
-        for _, h in enumerate(hs): 
-            result+=f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
+        result = ""
+        for _, h in enumerate(hs):
+            result += (
+                f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
+            )
         return result
 
-    def get_formatted_evidence(self, hs:ManyHypothesesAgSchema):
+    def get_formatted_evidence(self, hs: ManyHypothesesAgSchema):
         """Takes a structured input and returns in paragraphs the supporting and weakening evidence expectations that are part per hypothesis"""
-        result = ''
+        result = ""
         for _, h in enumerate(hs):
-            supporting_predictions = ''
+            supporting_predictions = ""
             for idx, e in enumerate(h.supporting_predictions):
-                supporting_predictions += f"Supporting Statement {idx} for Hypothesis {h.id}: {e}"
-            weakening_predictions = ''
+                supporting_predictions += (
+                    f"Supporting Statement {idx} for Hypothesis {h.id}: {e}"
+                )
+            weakening_predictions = ""
             for idx, e in enumerate(h.weakening_predictions):
-                weakening_predictions += f"Weakening Statement {idx} for Hypothesis {h.id}: {e}"
+                weakening_predictions += (
+                    f"Weakening Statement {idx} for Hypothesis {h.id}: {e}"
+                )
             # now append that string to result
-            result+=f"Predicted Evidence for Hypothesis {h.id}\n{supporting_predictions}\n{weakening_predictions}\n"
-            
+            result += f"Predicted Evidence for Hypothesis {h.id}\n{supporting_predictions}\n{weakening_predictions}\n"
+
         return result
-    
-    
+
+
+class ResearchTaskAgPrompt(PromptClass):
+    def __init__(self, question, hypothesis=None, tools=None):
+        super().__init__()
+        self.date = datetime.now().strftime("%Y-%m-%d")
+        self.question = question
+        self.context = self.get_formatted_context(hypothesis)
+        self.tools = self.get_formatted_tools(tools)
+        self.system_prompt = f"""
+You are the Research Task Agent in an autonomous investigation system.
+Today's date is {self.date}.
+
+The research objective has already been planned. Your responsibility is to plan the
+tool use: turn the objective into concrete, executable research tasks with exact
+tool calls. You do not run them — a separate executor will execute the calls you
+specify.
+
+You do NOT:
+- re-plan the investigation or change the objective you were given
+- answer the investigation question yourself
+- interpret results or decide what evidence means
+- judge, rank, or update hypotheses
+- invent tools that are not listed as available
+- execute anything — a separate executor runs the calls you specify
+
+You DO:
+- emit one task per tool call; split broad objectives into multiple tasks
+- reference the ID of the plan each task executes
+- select the most appropriate tool from the available tools only
+- produce exact, valid parameter values that match the tool's signature
+- formulate precise search queries instead of copying the question verbatim
+- keep each call focused on a single intent
+- include time qualifiers (e.g. the current year, "latest") when recency matters
+- prefer primary or high-quality sources (filings, official statistics, reputable
+  news)
+- design queries that could realistically surface the supporting OR weakening
+  results described in the plan — the goal is evidence that discriminates between
+  hypotheses, not evidence that merely confirms the leading one
+
+Parameters vs constraints:
+- parameters = the content of the tool call, matching the tool's signature
+  (e.g. query, topic)
+- constraints = execution limits for the executor to enforce (e.g. max_results)
+
+If a plan cannot be executed with the available tools, skip it rather than forcing
+an unsuitable tool call.
+
+Return only the requested structured output.
+"""
+        self.user_prompt = f"""
+INVESTIGATION QUESTION
+{self.question}
+
+
+RESEARCH PLANS AND HYPOTHESES
+{self.context}
+
+
+AVAILABLE TOOLS
+{self.tools}
+
+Produce the research tasks needed to execute the plans above.
+"""
+        logger.debug(f"User Prompt for TaskAgent:\n{self.user_prompt}")
+
+    def get_formatted_context(self, hypothesis):
+        """Render the hypotheses / planner output this task should serve."""
+        if not hypothesis:
+            return "No hypotheses or plan provided."
+        items = hypothesis if isinstance(hypothesis, list) else [hypothesis]
+        result = ""
+        for h in items:
+            if isinstance(h, BaseModel):
+                for key, value in h.model_dump().items():
+                    result += f"{key}: {value}\n"
+            else:
+                result += f"{h}\n"
+            result += "\n"
+        return result.strip()
+
+    def get_formatted_tools(self, tool):
+        """Render the available tools with their signatures so the agent can emit valid parameters."""
+        if not tool:
+            return "No tools are available for this task."
+        tools = tool if isinstance(tool, list) else [tool]
+        result = ""
+        for t in tools:
+            name = getattr(t, "name", str(t))
+            try:
+                schema = (
+                    t.schema()
+                    if callable(getattr(t, "schema", None))
+                    else getattr(t, "parameters", "unavailable")
+                )
+            except Exception:
+                schema = "unavailable"
+            result += f"Tool: {name}\nSignature/Parameters: {schema}\n\n"
+        return result.strip()

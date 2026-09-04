@@ -23,7 +23,7 @@ class BaseState(ABC):
         self.id = str(uuid.uuid4())
         self.name = f"{name} ({self.id})"  # modify name to unique name for state
         self.state = "INIT"
-        self.current_step = 0
+        self.current_step = 1
         self.max_steps = 10  # Default max steps, can be adjusted as needed
         self.timeout_perstep_s = 60
         self.tools = None
@@ -62,7 +62,6 @@ class InvestigationState(BaseState):
                 "ERROR",
                 reason=f"Error occurred while running research planner agent: {e}",
             )
-        self.current_step += 1
 
     def generate_research_plan(self):
         research_planner_agent = ResearchPlanner(
@@ -78,7 +77,6 @@ class InvestigationState(BaseState):
                 "ERROR",
                 reason=f"Error occurred while running research planner agent: {e}",
             )
-        self.current_step += 1
 
     def generate_research_task(self):
         research_task_agent = ResearchTask(
@@ -93,22 +91,22 @@ class InvestigationState(BaseState):
                 "ERROR",
                 reason=f"Error occurred while running research task agent: {e}",
             )
-        self.current_step += 1
 
     def run_order(self):
-        if self.state == "INIT" or self.current_step < self.max_steps:
+        if self.state == "INIT" or self.current_step <= self.max_steps:
             self.set_state(
                 "MAX_STEPS_REACHED", reason="Reached the maximum number of steps."
             )
             steps = OrderedDict(
                 [
-                    (f"step_{i}", func)
+                    (f"step_{self.current_step + i}", func)
                     for i, func in enumerate(
                         [
                             self.generate_hypotheses,
                             self.generate_research_plan,
                             self.generate_research_task,
-                        ]
+                        ],
+                        start=1,
                     )
                 ]
             )
@@ -121,6 +119,7 @@ class InvestigationState(BaseState):
                     logger.error(
                         f"Investigation timed out @ {step_id}: {self.get_name(step_func)}"
                     )
+                self.current_step += 1
         else:
             logger.info(
                 f"STOPPING: {self.state}, steps: {self.current_step}/{self.max_steps}"

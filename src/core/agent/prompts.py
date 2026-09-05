@@ -20,10 +20,110 @@ class PromptClass:
         )
 
 
-class HypothesisAgPrompt(PromptClass):
-    def __init__(self, input_text):
+class RetrySchemaAgPrompt(PromptClass):
+    def __init__(
+        self,
+        input_text,
+        output_schema: BaseModel | None = None,
+        error_logs: str | list[str] = "",
+    ):
+        super().__init__()
+        self.system_prompt = """
+        You are an expert JSON schema fixer. Your task is to fix and make sure the schema passes the validation.
+        You are provided with a schema that failed validation and the error logs. 
+        1. Use the error messages or exeption notices to fix 
+        2. Note that the error logs may contain supplementary information that may not point to the actual failure 
+        3. Focus purely on the JSON schema validation component.
+        4. Line numbers or character positions in the schema error logs could help but do not trust it blindly.
+        """
+        self.error_logs_formatted = self.get_formatted_error_logs(error_logs)
+        self.user_prompt = f"""
+        Input: 
+        {input_text}\n\n
+        
+        Error/Logs:
+        {error_logs}\n\n
+        
+        Schema Expectation:
+        {output_schema.model_json_schema()}\n\n
+        The generated result (your Input) did not pass Pydantic's JSON schema validation. Please fix the Input so that it passes the schema."""
+
+        logger.debug(f"User Prompt for Retry Agent:\n{self.user_prompt}")
+
+    def get_formatted_error_logs(self, error_logs: str | list[str]):
+
+        if isinstance(error_logs, str):
+            error_logs = [error_logs]
+
+        f_error_logs = ""
+        for i, el in enumerate(error_logs):
+            f_error_logs += f"""
+            Number {i + 1}: {el}\n
+            """
+
+        return f_error_logs
+
+
+class QuestionAnalyzerAgPrompt(PromptClass):
+    def __init__(self, question):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
+        self.system_prompt = f"""
+You are the Question Analyzer Agent in an autonomous investigation system.
+Today's date is {self.date}.
+
+Your responsibility is to analyze the investigation question BEFORE any
+hypotheses are generated or research is done.
+
+You do NOT:
+- answer the question
+- generate hypotheses
+- do any research
+- silently assume missing details — your job is precisely to surface them
+
+You DO:
+- classify the investigation type (e.g. comparative evaluation, causal
+  explanation, fact verification, trend analysis)
+- extract the explicit subject of the question
+- surface implicit comparison targets or unstated assumptions the question
+  relies on (e.g. "better than whom?", "according to which metric?")
+- list the missing information that would be needed to investigate rigorously
+  (definitions, evaluation criteria, time period, geographic scope, etc.)
+- decide whether the question can be investigated as-is
+
+Status rules:
+- NEEDS_CLARIFICATION only when missing information would materially change the
+  direction of the investigation. Do not be pedantic: gaps that research can
+  resolve on its own are NOT a reason to ask the user.
+- CLEAR when the question is specific enough to investigate meaningfully as-is.
+
+Follow-up question rules:
+- only formulate one when the status is NEEDS_CLARIFICATION; leave it empty
+  otherwise
+- ask ONE concise, natural-language question that resolves the most critical
+  gaps — combine related gaps instead of interrogating the user with a list
+  of separate questions
+- phrase it so the user can answer in one or two sentences
+  (e.g. "By 'greatest', do you mean revenue, market cap, or something else —
+  and over what time period?")
+
+Return only the requested structured output.
+"""
+        self.user_prompt = f"""
+QUESTION
+{question}
+
+
+Analyze the question above.
+"""
+        logger.debug(f"User Prompt for Question Analyzer Agent:\n{self.user_prompt}")
+
+
+class HypothesisAgPrompt(PromptClass):
+    def __init__(self, input_text, analysis=None, clarification=None):
+        super().__init__()
+        self.date = datetime.now().strftime("%Y-%m-%d")
+        self.analysis_context = self.get_formatted_analysis(analysis, clarification)
         self.system_prompt = f"""
 You are a hypothesis generation agent. Your task is to generate hypotheses based on the provided input from the user.
 Today's date is {self.date}. 
@@ -35,7 +135,24 @@ Instructions:
 5. Evidence supporting each hypothesis should be provided if available. If no evidence is available, indicate that as well.
 6. To base your hypotheses on evidence, you may need to conduct research using the tools available to you. Ensure that the evidence is credible and relevant to the hypotheses generated.
 """
-        self.user_prompt = f"Input: {input_text}\n\nPlease generate hypotheses based on the above input."
+        self.user_prompt = f"Input: {input_text}\n\n{self.analysis_context}Please generate hypotheses based on the above input."
+
+        logger.debug(f"User Prompt for Hypothesis Agent:\n{self.user_prompt}")
+
+    def get_formatted_analysis(self, analysis, clarification):
+        """Render the question analysis and any user clarification as context sections."""
+        sections = ""
+        if analysis is not None:
+            sections += "QUESTION ANALYSIS\n"
+            if isinstance(analysis, BaseModel):
+                for key, value in analysis.model_dump().items():
+                    sections += f"{key}: {value}\n"
+            else:
+                sections += f"{analysis}\n"
+            sections += "\n"
+        if clarification:
+            sections += f"USER CLARIFICATION\n{clarification}\n\n"
+        return sections
 
 
 class ResearchPlannerAgPrompt(PromptClass):
@@ -98,10 +215,6 @@ HYPOTHESES
 
 CURRENT EXPECTED EVIDENCE
 {self.evidence}
-
-
-KNOWN GAPS
-(Your task to identify)
 """
         logger.debug(f"User Prompt for PlannerAgent:\n{self.user_prompt}")
 
@@ -121,12 +234,12 @@ KNOWN GAPS
             supporting_predictions = ""
             for idx, e in enumerate(h.supporting_predictions):
                 supporting_predictions += (
-                    f"Supporting Statement {idx} for Hypothesis {h.id}: {e}"
+                    f"Supporting Statement {idx} for Hypothesis {h.id}: {e}\n"
                 )
             weakening_predictions = ""
             for idx, e in enumerate(h.weakening_predictions):
                 weakening_predictions += (
-                    f"Weakening Statement {idx} for Hypothesis {h.id}: {e}"
+                    f"Weakening Statement {idx} for Hypothesis {h.id}: {e}\n"
                 )
             # now append that string to result
             result += f"Predicted Evidence for Hypothesis {h.id}\n{supporting_predictions}\n{weakening_predictions}\n"
@@ -135,11 +248,11 @@ KNOWN GAPS
 
 
 class ResearchTaskAgPrompt(PromptClass):
-    def __init__(self, question, hypothesis=None, tools=None):
+    def __init__(self, question, plans=None, tools=None):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
         self.question = question
-        self.context = self.get_formatted_context(hypothesis)
+        self.context = self.get_formatted_context(plans)
         self.tools = self.get_formatted_tools(tools)
         self.system_prompt = f"""
 You are the Research Task Agent in an autonomous investigation system.
@@ -187,7 +300,7 @@ INVESTIGATION QUESTION
 {self.question}
 
 
-RESEARCH PLANS AND HYPOTHESES
+RESEARCH PLANS
 {self.context}
 
 
@@ -198,18 +311,18 @@ Produce the research tasks needed to execute the plans above.
 """
         logger.debug(f"User Prompt for TaskAgent:\n{self.user_prompt}")
 
-    def get_formatted_context(self, hypothesis):
-        """Render the hypotheses / planner output this task should serve."""
-        if not hypothesis:
-            return "No hypotheses or plan provided."
-        items = hypothesis if isinstance(hypothesis, list) else [hypothesis]
+    def get_formatted_context(self, plans):
+        """Render the planner output this task should execute."""
+        if not plans:
+            return "No research plans provided."
+        items = plans if isinstance(plans, list) else [plans]
         result = ""
-        for h in items:
-            if isinstance(h, BaseModel):
-                for key, value in h.model_dump().items():
+        for p in items:
+            if isinstance(p, BaseModel):
+                for key, value in p.model_dump().items():
                     result += f"{key}: {value}\n"
             else:
-                result += f"{h}\n"
+                result += f"{p}\n"
             result += "\n"
         return result.strip()
 

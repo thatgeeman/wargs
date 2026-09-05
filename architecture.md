@@ -62,7 +62,7 @@ The central idea is:
                     │ objective            │
                     │ hypotheses targeted  │
                     │ expected outcomes    │
-                    │ tool calls            │
+                    │ tool calls           │
                     └──────────┬───────────┘
                                │
                                ▼

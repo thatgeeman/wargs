@@ -1,4 +1,32 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+class QuestionAnalysisAgSchema(BaseModel):
+    investigation_type: str = Field(
+        default="",
+        description="The kind of investigation the question requires (e.g. comparative evaluation, causal explanation, fact verification, trend analysis)",
+    )
+    explicit_subject: str = Field(
+        default="", description="The subject explicitly named in the question"
+    )
+    implicit_comparison: str = Field(
+        default="",
+        description="Implicit comparison targets or assumptions the question relies on without stating them (e.g. 'other companies'). Empty if none.",
+    )
+    missing_information: list[str] = Field(
+        default_factory=list,
+        description="Missing information needed to investigate rigorously (e.g. definitions, evaluation criteria, time period, geographic scope)",
+    )
+    investigation_status: Literal["CLEAR", "NEEDS_CLARIFICATION"] = Field(
+        default="CLEAR",
+        description="CLEAR if the question can be investigated as-is; NEEDS_CLARIFICATION if missing information would materially change the investigation",
+    )
+    followup_question: str = Field(
+        default="",
+        description="A single concise follow-up question asking the user for the most critical missing information. Only filled when investigation_status is NEEDS_CLARIFICATION; empty otherwise.",
+    )
 
 
 class HypothesisAgSchema(BaseModel):
@@ -67,7 +95,8 @@ class ManyResearchPlannerAgSchema(BaseModel):
 
 class ResearchTaskAgSchema(BaseModel):
     id: str = Field(
-        ..., description="Unique identifier for this task (e.g. 'RT-001', 'RT-002')"
+        ...,
+        description="Unique identifier for this task execution (e.g. 'RT-001', 'RT-002')",
     )
     plan_id: str = Field(
         ..., description="ID of the research plan this task executes (e.g. 'RP-001')"
@@ -77,16 +106,17 @@ class ResearchTaskAgSchema(BaseModel):
     )
     parameters: dict = Field(
         default_factory=dict,
-        description="Exact parameter values for the tool call, matching the tool's signature (e.g. query, topic)",
+        description="Exact parameter values for the tool call, matching the tool's signature",
     )
-    constraints: dict = Field(
-        default_factory=dict,
-        description="Execution limits for the executor/harness to enforce (e.g. max_results, max_depth, timeout_s)",
+    result: dict = Field(
+        default={},
+        description="Result after executing this task. Not to be filled by an LLM.",
     )
 
 
 class ManyResearchTaskAgSchema(BaseModel):
     tasks: list[ResearchTaskAgSchema] = Field(
         default_factory=list,
-        description="A list of tool-use tasks that execute the research plans. Each tool use needs a full task definition (ie, a single Research Plan/RP ID per tool)",
+        description="""A list of tool-use tasks that execute the research plans. The research task is an executable decomposition of research plans. 
+        Each tool use needs a full task definition (ie, a single Research Plan/RP ID per research tool/task is required)""",
     )

@@ -37,6 +37,10 @@ class HypothesisAgSchema(BaseModel):
     confidence: float = Field(
         ..., description="Prior confidence before verifying the statement", ge=0, le=1
     )
+    confidence_history: list[float] = Field(
+        default_factory=list,
+        description="Confidence values over time, updated by the harness as evidence arrives. Leave empty when generating.",
+    )
     supporting_predictions: list[str] = Field(
         default_factory=list,
         description="Knowledge (expectations) that would support the hypothesis",
@@ -50,6 +54,7 @@ class HypothesisAgSchema(BaseModel):
 class ManyHypothesesAgSchema(BaseModel):
     hypotheses: list[HypothesisAgSchema] = Field(
         default_factory=list,
+        min_length=1,
         description="A list of hypotheses that could explain the phenomenon",
     )
 
@@ -85,11 +90,17 @@ class ResearchPlannerAgSchema(BaseModel):
         description="What kind of evidence, if discovered, would make us less confident that this hypothesis is correct?",
     )
     priority: float = Field(..., ge=0, le=1)
+    status: Literal["ACTIVE", "WEAKENED", "INVALIDATED", "COMPLETED"] = Field(
+        default="ACTIVE",
+        description="Lifecycle status of the plan. Always 'ACTIVE' for newly proposed plans; transitions (WEAKENED / INVALIDATED / COMPLETED) are applied by the harness based on evidence, never by rewriting the plan's objective",
+    )
 
 
 class ManyResearchPlannerAgSchema(BaseModel):
     plans: list[ResearchPlannerAgSchema] = Field(
-        default_factory=list, description="List of research plans to deep dive into."
+        default_factory=list,
+        min_length=1,
+        description="List of research plans to deep dive into.",
     )
 
 
@@ -117,6 +128,42 @@ class ResearchTaskAgSchema(BaseModel):
 class ManyResearchTaskAgSchema(BaseModel):
     tasks: list[ResearchTaskAgSchema] = Field(
         default_factory=list,
-        description="""A list of tool-use tasks that execute the research plans. The research task is an executable decomposition of research plans. 
+        min_length=1,
+        description="""A list of tool-use tasks that execute the research plans. The research task is an executable decomposition of research plans.
         Each tool use needs a full task definition (ie, a single Research Plan/RP ID per research tool/task is required)""",
+    )
+
+
+class SingleEvidenceEvaluationAgSchema(BaseModel):
+    evidence_id: str = Field(
+        default="",
+        description="ID of the evidence item being evaluated (the ID of the task that produced it, e.g. 'RT-001')",
+    )
+    evidence_relevant: bool = Field(
+        default=False,
+        description="True if this evidence item actually addresses the investigation question and the expectations stated in the research plans",
+    )
+    relevance_reasoning: str = Field(
+        default="",
+        description="Why this evidence item is or is not relevant to the question and plans",
+    )
+    evidence_impact: Literal["supporting", "weakening", "contradictory", "neutral"] = Field(
+        default="neutral",
+        description="What this evidence item does to current beliefs: supporting = strengthens at least one hypothesis; weakening = reduces confidence in at least one hypothesis; contradictory = directly conflicts with a hypothesis, an alternative must be investigated; neutral = relevant but insufficient to change confidence in any hypothesis",
+    )
+    impact_reasoning: str = Field(
+        default="",
+        description="Which hypotheses this evidence item affects, and how",
+    )
+
+
+class EvidenceEvaluationAgSchema(BaseModel):
+    evaluations: list[SingleEvidenceEvaluationAgSchema] = Field(
+        default_factory=list,
+        min_length=1,
+        description="One independent evaluation per evidence item provided",
+    )
+    feedback: str = Field(
+        default="",
+        description="Actionable feedback for the next iteration, aggregated across all evidence: what is still missing and what new plans or tasks should target",
     )

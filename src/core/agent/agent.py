@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from ...config import Config
 from ..model import Model
 from .prompts import (
+    EvidenceEvaluatorAgPrompt,
     HypothesisAgPrompt,
     QuestionAnalyzerAgPrompt,
     ResearchPlannerAgPrompt,
@@ -16,6 +17,7 @@ from .prompts import (
     RetrySchemaAgPrompt,
 )
 from .schemas import (
+    EvidenceEvaluationAgSchema,
     ManyHypothesesAgSchema,
     ManyResearchPlannerAgSchema,
     ManyResearchTaskAgSchema,
@@ -111,10 +113,22 @@ class Agent(ABC):
             response, extra_response = self.model.call(
                 self.prompts.user_prompt, output_schema=self.get_json_schema()
             )
+            if not response:
+                return response, extra_response
+            # check choices
             choice = response.choices[0]
             # Store the choice as a dictionary in the trace for later analysis
             self.store_trace(choice.model_dump())
             self.state_transition("GENERATION")
+            if choice.finish_reason == "length":
+                # Truncated by max_tokens — content is missing, so the schema
+                # fixer cannot repair it. Treat as a failed attempt and
+                # regenerate from scratch instead.
+                logger.warning(
+                    f"{self.name}: response truncated (finish_reason='length', "
+                    f"max_tokens={self.model.max_tokens}). Retrying generation."
+                )
+                return None, extra_response
             msg = choice.message.content.strip()
             msg = (
                 msg
@@ -130,6 +144,7 @@ class Agent(ABC):
             return None, extra_response
 
     def run(self, to_json=False):
+        extra_response = {}
         for attempt in range(1, self.max_retries + 1):
             msg, extra_response = self._trigger_run(to_json=to_json)
             if msg:
@@ -255,13 +270,16 @@ class ResearchPlanner(Agent):
         self,
         input: str,
         hypothesis: ManyHypothesesAgSchema = [],
+        evaluation=None,
         max_retries=1,
         session_id=None,
     ):
         self.instance_id = uuid.uuid4()
         self.name = "ResearchPlannerAgent_" + str(self.instance_id)
         self.hypothesis = hypothesis
-        self.prompts = ResearchPlannerAgPrompt(question=input, hypothesis=hypothesis)
+        self.prompts = ResearchPlannerAgPrompt(
+            question=input, hypothesis=hypothesis, evaluation=evaluation
+        )
         self.output_schema = ManyResearchPlannerAgSchema()
         super().__init__(
             self.name,
@@ -278,13 +296,16 @@ class ResearchTask(Agent):
         input: str,
         plans: list = [],
         tools: list = [],
+        evaluation=None,
         max_retries=1,
         session_id=None,
     ):
         self.instance_id = uuid.uuid4()
         self.name = "ResearchTaskAgent_" + str(self.instance_id)
         self.tools = tools
-        self.prompts = ResearchTaskAgPrompt(question=input, plans=plans, tools=tools)
+        self.prompts = ResearchTaskAgPrompt(
+            question=input, plans=plans, tools=tools, evaluation=evaluation
+        )
         self.output_schema = ManyResearchTaskAgSchema()
         super().__init__(
             self.name,
@@ -294,6 +315,41 @@ class ResearchTask(Agent):
             max_retries=max_retries,
             session_id=session_id,
         )
+
+
+class EvidenceEvaluator(Agent):
+    def __init__(
+        self,
+        input: str,
+        clarification=None,
+        hypothesis=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+        max_retries=1,
+        session_id=None,
+    ):
+        self.instance_id = uuid.uuid4()
+        self.name = "EvidenceEvaluatorAgent_" + str(self.instance_id)
+        self.prompts = EvidenceEvaluatorAgPrompt(
+            question=input,
+            clarification=clarification,
+            hypothesis=hypothesis,
+            plans=plans,
+            tasks=tasks,
+            evidence=evidence,
+        )
+        self.output_schema = EvidenceEvaluationAgSchema()
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
+        # auto-run (executor-style): evaluation is available right after construction
+        result = self.run(to_json=True)
+        self.evaluation = result.model_dump() if result else {}
 
 
 if __name__ == "__main__":

@@ -465,6 +465,68 @@ H1
                   contradictory evidence
 ```
 
+### Evidence evaluation loop
+
+After research execution:
+
+```text
+Evidence
+   ↓
+EvidenceEvaluator
+   ↓
+Is it relevant?
+ ├─ No → generate new research task
+ └─ Yes
+      ↓
+   What is the impact?
+   ├─ Supporting → update hypothesis
+   ├─ Weakening → update hypothesis + feed weakness into next research
+   ├─ Contradictory → update hypothesis + investigate alternative
+   └─ Neutral/insufficient → generate new research task
+```
+
+The evaluator should distinguish:
+
+```text
+relevance ≠ impact
+```
+
+Its job is to determine **whether the evidence matters and what it does to current beliefs**, not to perform the actual hypothesis update.
+
+Each piece of evidence is evaluated independently (one evaluation per evidence item); the harness aggregates the per-item verdicts, strongest signal first: contradictory > weakening > supporting > neutral.
+
+---
+
+### Research plan lifecycle
+
+Treat `ResearchPlan` as **immutable**.
+
+A plan represents:
+
+> “Given what we currently know, this is what we need to establish.”
+
+When new evidence materially changes the investigation:
+
+```text
+RP-001
+  ↓
+evidence changes understanding
+  ↓
+RP-001 → WEAKENED / INVALIDATED / COMPLETED
+  ↓
+create RP-002
+```
+
+Don't mutate an old plan into a new objective.
+
+Minor execution changes—retrying a search, refining a query, adding another source—stay within the existing plan.
+
+**Rule:**
+**Change in execution → update the task.**
+**Change in research objective → create a new plan.**
+
+New plans are appended with fresh deterministic IDs (RP-002, RP-003, …); existing plans keep their ID and objective, only their status transitions.
+
 ---
 
 # 11. Contradiction Agent

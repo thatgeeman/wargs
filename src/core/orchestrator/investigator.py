@@ -8,6 +8,7 @@ from ...helpers import run_with_timeout
 from ...tools.executor import ToolExecutor
 from ...tools.store import WebSearch
 from ..agent import (
+    EvidenceEvaluator,
     HypothesisAgent,
     ManyHypothesesAgSchema,
     ManyResearchPlannerAgSchema,
@@ -57,6 +58,8 @@ class InvestigationState(BaseState):
         self.research_plans = []
         self.research_tasks = []
         self.evidence = []
+        self.evidence_evaluation = []
+        self.evidence_impact = None
         self.contradictions = []
         self.events = []
         self.max_retries = 3
@@ -128,10 +131,11 @@ class InvestigationState(BaseState):
                 reason=f"Error occurred while running hypothesis agent: {e}",
             )
 
-    def generate_research_plan(self):
+    def generate_research_plan(self, evaluation=None):
         research_planner_agent = ResearchPlanner(
             input=self.question,
             hypothesis=self.hypotheses,
+            evaluation=evaluation,
             max_retries=self.max_retries,
             session_id=self.session_id,
         )
@@ -143,22 +147,31 @@ class InvestigationState(BaseState):
                 )
                 return
             self.set_state("RESEARCH_PLAN_GENERATED")
-            self.research_plans = rp.plans
+            # plans are immutable: append new objectives, never replace existing ones
+            self.research_plans.extend(self._assign_plan_ids(rp.plans))
         except Exception as e:
             self.set_state(
                 "ERROR",
                 reason=f"Error occurred while running research planner agent: {e}",
             )
 
-    def generate_research_task(self):
-        if not self.research_plans:
-            self.set_state("TASKS_SKIPPED", reason="No research plans available.")
+    def generate_research_task(self, evaluation=None):
+        # only open objectives get executed — closed plans (WEAKENED /
+        # INVALIDATED / COMPLETED) are kept for history but not acted on
+        active_plans = [
+            p for p in self.research_plans if getattr(p, "status", "ACTIVE") == "ACTIVE"
+        ]
+        if not active_plans:
+            self.set_state(
+                "TASKS_SKIPPED", reason="No active research plans available."
+            )
             return
         research_task_agent = ResearchTask(
             input=self.question,
-            plans=self.research_plans,
+            plans=active_plans,
             tools=self.tools,
             max_retries=self.max_retries,
+            evaluation=evaluation,
             session_id=self.session_id,
         )
         try:
@@ -213,10 +226,150 @@ class InvestigationState(BaseState):
         failed = total_tasks - len(evidence)
         self.set_state(
             "ALL_TASKS_EXECUTED",
-            reason=f"{failed}/{total_tasks} tasks failed." if failed else "All tasks succeeded.",
+            reason=f"{failed}/{total_tasks} tasks failed."
+            if failed
+            else "All tasks succeeded.",
         )
         self.evidence = evidence  # since this is a evidence gathering process
         logger.info(f"Evidence gathered. Count: {len(self.evidence)}")
+
+    def update_hypothesis(self):
+        """Apply evidence-driven updates to plans and hypothesis confidence.
+
+        Plans are immutable: evidence never rewrites a plan's objective, it
+        only transitions its status. Strongest impact wins per plan:
+        contradictory -> INVALIDATED, weakening -> WEAKENED, supporting -> COMPLETED.
+        New objectives are created by generate_research_plan, not by mutating
+        existing plans.
+
+        Confidence is updated per hypothesis from each relevant evidence item:
+        direction comes from the item's impact, magnitude is weighted by the
+        priority of the plan that produced the evidence. Every update is
+        recorded in the hypothesis' confidence_history and in self.events
+        with the evaluator's impact_reasoning.
+        """
+        evaluations = self.evidence_evaluation.get("evaluations", [])
+        # map each evidence item back to the plan its task executed
+        task_to_plan = {t.id: t.plan_id for t in self.research_tasks}
+        plan_by_id = {p.id: p for p in self.research_plans}
+
+        # --- plan lifecycle transitions ---
+        transitions = []
+        for impact, new_status in (
+            ("contradictory", "INVALIDATED"),
+            ("weakening", "WEAKENED"),
+            ("supporting", "COMPLETED"),
+        ):
+            for e in evaluations:
+                if not e.get("evidence_relevant") or e.get("evidence_impact") != impact:
+                    continue
+                plan = plan_by_id.get(task_to_plan.get(e.get("evidence_id")))
+                if plan is None or plan.status != "ACTIVE":
+                    continue
+                plan.status = new_status
+                transitions.append(f"{plan.id} -> {new_status}")
+
+        # --- per-hypothesis confidence updates ---
+        updates = []
+        for e in evaluations:
+            impact = e.get("evidence_impact", "neutral")
+            if not e.get("evidence_relevant") or impact == "neutral":
+                continue
+            plan = plan_by_id.get(task_to_plan.get(e.get("evidence_id")))
+            if plan is None:
+                continue
+            weight = plan.priority  # higher-priority evidence moves confidence more
+            for h in self.hypotheses:
+                if str(h.id) not in plan.hypotheses_targeted:
+                    continue
+                old = h.confidence
+                if impact == "supporting":
+                    new = old + weight * (1 - old)
+                elif impact == "weakening":
+                    new = old - weight * old
+                else:  # contradictory
+                    new = old - 2 * weight * old
+                h.confidence = round(min(1.0, max(0.0, new)), 3)
+                h.confidence_history.append(h.confidence)
+                updates.append(f"H{h.id}: {old} -> {h.confidence}")
+                self.events.append(
+                    {
+                        "event": "confidence_update",
+                        "hypothesis_id": h.id,
+                        "evidence_id": e.get("evidence_id"),
+                        "impact": impact,
+                        "old_confidence": old,
+                        "new_confidence": h.confidence,
+                        "reasoning": e.get("impact_reasoning", ""),
+                    }
+                )
+
+        self.set_state(
+            "HYPOTHESIS_UPDATED",
+            reason="Plan transitions: "
+            + (", ".join(transitions) if transitions else "none")
+            + " | Confidence updates: "
+            + (", ".join(updates) if updates else "none"),
+        )
+
+    def _assign_plan_ids(self, plans):
+        """Assign deterministic plan IDs (RP-001, RP-002, ...) continuing after
+        the existing ones — IDs proposed by the LLM are ignored."""
+        next_n = 1 + max(
+            (
+                int(p.id.split("-")[1])
+                for p in self.research_plans
+                if p.id.startswith("RP-") and p.id.split("-")[1].isdigit()
+            ),
+            default=0,
+        )
+        for plan in plans:
+            plan.id = f"RP-{next_n:03d}"
+            next_n += 1
+        return plans
+
+    def evaluate_evidence(self):
+        # check evidence
+        if self.evidence:
+            ee = EvidenceEvaluator(
+                input=self.question,
+                clarification=self.clarification,
+                hypothesis=self.hypotheses,
+                plans=self.research_plans,
+                tasks=self.research_tasks,
+                evidence=self.evidence,
+                max_retries=self.max_retries,
+                session_id=self.session_id,
+            )
+            self.evidence_evaluation = ee.evaluation
+        else:
+            logger.error("Evidence is empty. Cannot be evaluated")
+            raise AttributeError
+        evaluations = self.evidence_evaluation.get("evaluations", [])
+        relevant = [e for e in evaluations if e.get("evidence_relevant")]
+        # relevance != impact: first check whether any evidence matters at all
+        if not relevant:
+            # no relevant evidence -> execution-level failure: new tasks with feedback
+            return self.generate_research_task(evaluation=self.evidence_evaluation)
+        # aggregate per-evidence impact over relevant items, strongest signal wins:
+        # contradictory > weakening > supporting > neutral
+        impacts = {e.get("evidence_impact", "neutral") for e in relevant}
+        self.evidence_impact = next(
+            (i for i in ("contradictory", "weakening", "supporting") if i in impacts),
+            "neutral",
+        )
+        if self.evidence_impact == "supporting":
+            return self.update_hypothesis()
+        if self.evidence_impact == "weakening":
+            self.update_hypothesis()
+            # feed the weakness into the next research round
+            return self.generate_research_task(evaluation=self.evidence_evaluation)
+        if self.evidence_impact == "contradictory":
+            self.update_hypothesis()
+            # investigate the alternative: objective changed -> new plan
+            return self.generate_research_plan(evaluation=self.evidence_evaluation)
+        # neutral / insufficient -> more evidence needed, same objective
+        return self.generate_research_task(evaluation=self.evidence_evaluation)
 
     def run_order(self):
         if self.state == "INIT" or self.current_step <= self.max_steps:
@@ -231,6 +384,7 @@ class InvestigationState(BaseState):
                             self.generate_research_plan,
                             self.generate_research_task,
                             self.execute_research_task,
+                            self.evaluate_evidence,
                         ],
                         start=1,
                     )
@@ -264,7 +418,7 @@ if __name__ == "__main__":
     # input_text = "Why is Infineon doing worse than NVIDIA?"
     # input_text = "Google is the greatest company on earth"
     session_id = time.time()
-    input_text = "Morning are great for productive technical work"
+    input_text = "Morning are great for productive technical work. For junor developers to complete the coding tasks on their list."
     state = InvestigationState(
         question=input_text,
         session_id=session_id,

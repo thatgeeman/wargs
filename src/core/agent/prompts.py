@@ -89,12 +89,16 @@ You DO:
   relies on (e.g. "better than whom?", "according to which metric?")
 - list the missing information that would be needed to investigate rigorously
   (definitions, evaluation criteria, time period, geographic scope, etc.)
+- decide whether you can continue without requiring this extra detail, as
+  rather than forcing the user to clarify, establishing a reasonable operational definition 
+  leads to better user experience
 - decide whether the question can be investigated as-is
 
 Status rules:
 - NEEDS_CLARIFICATION only when missing information would materially change the
   direction of the investigation. Do not be pedantic: gaps that research can
-  resolve on its own are NOT a reason to ask the user.
+  resolve on its own are NOT a reason to ask the user. Dont be pushy for extra clarification, 
+  if you can establish a reasonable operational definition upfront
 - CLEAR when the question is specific enough to investigate meaningfully as-is.
 
 Follow-up question rules:
@@ -103,9 +107,7 @@ Follow-up question rules:
 - ask ONE concise, natural-language question that resolves the most critical
   gaps — combine related gaps instead of interrogating the user with a list
   of separate questions
-- phrase it so the user can answer in one or two sentences
-  (e.g. "By 'greatest', do you mean revenue, market cap, or something else —
-  and over what time period?")
+- phrase it so the user can answer in one or two sentences)
 
 Return only the requested structured output.
 """
@@ -156,12 +158,13 @@ Instructions:
 
 
 class ResearchPlannerAgPrompt(PromptClass):
-    def __init__(self, question, hypothesis: ManyHypothesesAgSchema = []):
+    def __init__(self, question, hypothesis: ManyHypothesesAgSchema = [], evaluation=None):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
         self.question = question
         self.hypothesis = self.get_formatted_hypothesis(hypothesis)
         self.evidence = self.get_formatted_evidence(hypothesis)
+        self.evaluation = self.get_formatted_evaluation(evaluation)
         self.system_prompt = f"""
 You are the Research Planner Agent in an autonomous investigation system.
 Today's date is {self.date}. 
@@ -200,6 +203,9 @@ Prefer research actions that:
 Do not assume that the current leading hypothesis is correct.
 Actively look for research that could disprove or weaken it.
 
+If evaluation feedback from a previous evidence round is provided, propose
+research actions that address its gaps.
+
 Return only the requested structured output.
     """
         self.user_prompt = f"""
@@ -215,6 +221,10 @@ HYPOTHESES
 
 CURRENT EXPECTED EVIDENCE
 {self.evidence}
+
+
+EVALUATION FEEDBACK FROM PREVIOUS EVIDENCE
+{self.evaluation}
 """
         logger.debug(f"User Prompt for PlannerAgent:\n{self.user_prompt}")
 
@@ -246,14 +256,25 @@ CURRENT EXPECTED EVIDENCE
 
         return result
 
+    def get_formatted_evaluation(self, evaluation):
+        """Render feedback from a previous evidence evaluation, if any."""
+        if not evaluation:
+            return "No prior evaluation — this is the first research round."
+        if isinstance(evaluation, BaseModel):
+            evaluation = evaluation.model_dump()
+        if isinstance(evaluation, dict):
+            return "\n".join(f"{key}: {value}" for key, value in evaluation.items())
+        return str(evaluation)
+
 
 class ResearchTaskAgPrompt(PromptClass):
-    def __init__(self, question, plans=None, tools=None):
+    def __init__(self, question, plans=None, tools=None, evaluation=None):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
         self.question = question
         self.context = self.get_formatted_context(plans)
         self.tools = self.get_formatted_tools(tools)
+        self.evaluation = self.get_formatted_evaluation(evaluation)
         self.system_prompt = f"""
 You are the Research Task Agent in an autonomous investigation system.
 Today's date is {self.date}.
@@ -293,6 +314,9 @@ Parameters vs constraints:
 If a plan cannot be executed with the available tools, skip it rather than forcing
 an unsuitable tool call.
 
+If evaluation feedback from a previous evidence round is provided, generate
+tasks that address it.
+
 Return only the requested structured output.
 """
         self.user_prompt = f"""
@@ -306,6 +330,10 @@ RESEARCH PLANS
 
 AVAILABLE TOOLS
 {self.tools}
+
+
+EVALUATION FEEDBACK FROM PREVIOUS EVIDENCE
+{self.evaluation}
 
 Produce the research tasks needed to execute the plans above.
 """
@@ -343,4 +371,123 @@ Produce the research tasks needed to execute the plans above.
             except Exception:
                 schema = "unavailable"
             result += f"Tool: {name}\nSignature/Parameters: {schema}\n\n"
+        return result.strip()
+
+    def get_formatted_evaluation(self, evaluation):
+        """Render feedback from a previous evidence evaluation, if any."""
+        if not evaluation:
+            return "No prior evaluation — this is the first research round."
+        if isinstance(evaluation, BaseModel):
+            evaluation = evaluation.model_dump()
+        if isinstance(evaluation, dict):
+            return "\n".join(f"{key}: {value}" for key, value in evaluation.items())
+        return str(evaluation)
+
+
+class EvidenceEvaluatorAgPrompt(PromptClass):
+    def __init__(self, question, clarification=None, hypothesis=None, plans=None, tasks=None, evidence=None):
+        super().__init__()
+        self.date = datetime.now().strftime("%Y-%m-%d")
+        self.question = question
+        self.clarification = clarification or "No clarification provided."
+        self.hypothesis = self.get_formatted_hypotheses(hypothesis)
+        self.plans = self.get_formatted_items(plans)
+        self.tasks = self.get_formatted_items(tasks)
+        self.evidence = self.get_formatted_items(evidence)
+        self.system_prompt = f"""
+You are the Evidence Evaluator Agent in an autonomous investigation system.
+Today's date is {self.date}.
+
+The investigation has gathered evidence by executing research tasks. Your
+responsibility is to judge the quality and usefulness of that evidence. You do
+not gather new evidence and you do not update hypotheses — separate steps do
+that based on your evaluation.
+
+You DO:
+- evaluate EACH piece of evidence independently: one evaluation per evidence
+  item, identified by its ID (the ID of the task that produced it)
+- judge RELEVANCE of each item: does it actually address the investigation
+  question and the expectations stated in the research plans?
+- judge IMPACT of each relevant item: what does it do to current beliefs?
+  - supporting: strengthens at least one hypothesis
+  - weakening: reduces confidence in at least one hypothesis
+  - contradictory: directly conflicts with a hypothesis — an alternative
+    explanation must be investigated
+  - neutral: relevant, but insufficient to change confidence in any hypothesis
+- give concrete, actionable FEEDBACK for the next iteration, aggregated across
+  all items: what is still missing, what should be searched next, which angles
+  were not covered
+
+You do NOT:
+- answer the investigation question
+- update, rank, or select hypotheses
+- invent evidence that was not gathered
+- treat hypotheses as facts
+
+Be strict: evidence that does not help distinguish between hypotheses is not
+high impact, even if it is topically related.
+
+Return only the requested structured output.
+"""
+        self.user_prompt = f"""
+INVESTIGATION QUESTION
+{self.question}
+
+
+USER CLARIFICATION
+{self.clarification}
+
+
+HYPOTHESES
+{self.hypothesis}
+
+
+RESEARCH PLANS
+{self.plans}
+
+
+EXECUTED TASKS
+{self.tasks}
+
+
+GATHERED EVIDENCE
+{self.evidence}
+
+
+Evaluate each piece of gathered evidence independently — one evaluation per
+evidence item — and provide aggregated feedback for the next research
+iteration.
+"""
+        logger.debug(f"User Prompt for EvidenceEvaluatorAgent:\n{self.user_prompt}")
+
+    def get_formatted_items(self, items):
+        """Render plans/tasks/evidence (BaseModel, dict or str) as readable text."""
+        if not items:
+            return "None provided."
+        entries = items if isinstance(items, list) else [items]
+        result = ""
+        for item in entries:
+            if isinstance(item, BaseModel):
+                item = item.model_dump()
+            if isinstance(item, dict):
+                for key, value in item.items():
+                    result += f"{key}: {value}\n"
+            else:
+                result += f"{item}\n"
+            result += "\n"
+        return result.strip()
+
+    def get_formatted_hypotheses(self, hypotheses):
+        """Render hypotheses with confidence and their supporting/weakening predictions."""
+        if not hypotheses:
+            return "No hypotheses provided."
+        entries = hypotheses if isinstance(hypotheses, list) else [hypotheses]
+        result = ""
+        for h in entries:
+            result += f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
+            for e in getattr(h, "supporting_predictions", []):
+                result += f"  Supporting prediction: {e}\n"
+            for e in getattr(h, "weakening_predictions", []):
+                result += f"  Weakening prediction: {e}\n"
+            result += "\n"
         return result.strip()

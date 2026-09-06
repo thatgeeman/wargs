@@ -29,8 +29,8 @@ class Model(ModelConfig):
         self,
         model_name: str = "google/gemma-3-27b-it",
         system_prompt: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 1500,
+        temperature: float = 0,
+        max_tokens: int = 4096,
         reasoning_effort: str = "medium",
     ):
         super().__init__()
@@ -41,10 +41,13 @@ class Model(ModelConfig):
         self.reasoning_effort = reasoning_effort
         # Retries are handled at the agent level, so disable the SDK's internal
         # retry loop — otherwise each "attempt" is silently 3x the configured timeout.
+        self.timeout_s = 300
         self.client = OpenAI(
-            api_key=self.api_key, base_url=self.base_url, max_retries=0
+            api_key=self.api_key,
+            base_url=self.base_url,
+            max_retries=0,
+            timeout=self.timeout_s,
         )
-        self.timeout_s = 60
 
     def call(self, prompt: str, output_schema: dict = None):
         if output_schema:
@@ -68,7 +71,6 @@ class Model(ModelConfig):
                 max_tokens=self.max_tokens,
                 reasoning_effort=self.reasoning_effort,
                 response_format=output_schema,
-                timeout=self.timeout_s,
             )
         except APITimeoutError as e:
             logger.error(f"Model (OpenAI) call timed out (max: {self.timeout_s}): {e}")

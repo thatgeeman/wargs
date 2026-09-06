@@ -1,3 +1,4 @@
+import time
 import uuid
 from abc import ABC
 from collections import OrderedDict
@@ -23,9 +24,9 @@ logger = cfg.get_logger("InvestigatorLogger")
 
 
 class BaseState(ABC):
-    def __init__(self, name):
-        self.id = str(uuid.uuid4())
-        self.name = f"{name} ({self.id})"  # modify name to unique name for state
+    def __init__(self, name, session_id=None):
+        self.session_id = session_id if session_id else uuid.uuid4()
+        self.name = f"{name}_{self.session_id}"  # modify name to unique name for state
         self.state = "INIT"
         self.current_step = 1
         self.max_steps = 10  # Default max steps, can be adjusted as needed
@@ -45,12 +46,13 @@ class BaseState(ABC):
 
 
 class InvestigationState(BaseState):
-    def __init__(self, question):
-        super().__init__(name="Investigation Agent")
+    def __init__(self, question, session_id=None):
+        super().__init__(name="Investigation Agent", session_id=session_id)
+
         self.question = question
         self.question_analysis = None
         self.clarification = None
-        self.tools = [WebSearch()]
+        self.tools = [WebSearch(session_id=self.session_id)]
         self.hypotheses = []
         self.research_plans = []
         self.research_tasks = []
@@ -60,7 +62,11 @@ class InvestigationState(BaseState):
         self.max_retries = 3
 
     def analyze_question(self):
-        analyzer = QuestionAnalyzerAgent(self.question, max_retries=self.max_retries)
+        analyzer = QuestionAnalyzerAgent(
+            self.question,
+            max_retries=self.max_retries,
+            session_id=self.session_id,
+        )
         try:
             qa: QuestionAnalysisAgSchema = analyzer.run(True)
             if qa is None:
@@ -84,7 +90,9 @@ class InvestigationState(BaseState):
             self.set_state("CLARIFICATION_NOT_NEEDED")
             return
         if self.question_analysis.followup_question:
-            print(f"\nFollow-up question:\n{self.question_analysis.followup_question}\n")
+            print(
+                f"\nFollow-up question:\n{self.question_analysis.followup_question}\n"
+            )
         else:
             missing = "\n".join(
                 f"- {m}" for m in self.question_analysis.missing_information
@@ -92,9 +100,7 @@ class InvestigationState(BaseState):
             print(
                 f"\nThe question needs clarification. Missing information:\n{missing}\n"
             )
-        answer = input(
-            "Please clarify (or press Enter to proceed as-is): "
-        ).strip()
+        answer = input("Please clarify (or press Enter to proceed as-is): ").strip()
         if answer:
             self.clarification = answer
             self.set_state("CLARIFICATION_RECEIVED")
@@ -107,6 +113,7 @@ class InvestigationState(BaseState):
             analysis=self.question_analysis,
             clarification=self.clarification,
             max_retries=self.max_retries,
+            session_id=self.session_id,
         )
         try:
             ha: ManyHypothesesAgSchema = hypothesis_agent.run(True)
@@ -126,6 +133,7 @@ class InvestigationState(BaseState):
             input=self.question,
             hypothesis=self.hypotheses,
             max_retries=self.max_retries,
+            session_id=self.session_id,
         )
         try:
             rp: ManyResearchPlannerAgSchema = research_planner_agent.run(True)
@@ -147,7 +155,11 @@ class InvestigationState(BaseState):
             self.set_state("TASKS_SKIPPED", reason="No research plans available.")
             return
         research_task_agent = ResearchTask(
-            input=self.question, plans=self.research_plans, tools=self.tools, max_retries=self.max_retries
+            input=self.question,
+            plans=self.research_plans,
+            tools=self.tools,
+            max_retries=self.max_retries,
+            session_id=self.session_id,
         )
         try:
             rt: ManyResearchTaskAgSchema = research_task_agent.run(True)
@@ -173,8 +185,18 @@ class InvestigationState(BaseState):
             return
         for idx, task in enumerate(tasks, start=1):
             try:
-                task_exec = ToolExecutor(name=task.tool, parameters=task.parameters)
+                task_exec = ToolExecutor(
+                    name=task.tool,
+                    parameters=task.parameters,
+                    session_id=self.session_id,
+                )
                 exec_result = task_exec.result
+                if exec_result is None:
+                    self.set_state(
+                        f"TASK_FAILED Task {idx}/{total_tasks}",
+                        reason=f"Task {task.tool} with ID {task.id} returned no result.",
+                    )
+                    continue
                 task_updated: ResearchTaskAgSchema = task.model_dump()
                 task_updated["result"] = exec_result
                 evidence.append(task_updated)
@@ -188,7 +210,11 @@ class InvestigationState(BaseState):
                     "ERROR",
                     reason=f"Error occurred while running research task agent: {e}, Task {idx}/{total_tasks}",
                 )
-        self.set_state("ALL_TASKS_EXECUTED")
+        failed = total_tasks - len(evidence)
+        self.set_state(
+            "ALL_TASKS_EXECUTED",
+            reason=f"{failed}/{total_tasks} tasks failed." if failed else "All tasks succeeded.",
+        )
         self.evidence = evidence  # since this is a evidence gathering process
         logger.info(f"Evidence gathered. Count: {len(self.evidence)}")
 
@@ -236,8 +262,13 @@ class InvestigationState(BaseState):
 
 if __name__ == "__main__":
     # input_text = "Why is Infineon doing worse than NVIDIA?"
-    input_text = "Google is the greatest company on earth"
-    state = InvestigationState(question=input_text)
+    # input_text = "Google is the greatest company on earth"
+    session_id = time.time()
+    input_text = "Morning are great for productive technical work"
+    state = InvestigationState(
+        question=input_text,
+        session_id=session_id,
+    )
     state.run_order()
     print("\n\n---------------------------------------------------------------")
     logger.info(

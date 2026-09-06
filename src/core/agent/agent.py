@@ -1,4 +1,6 @@
 import json
+import random
+import time
 import uuid
 from abc import ABC
 
@@ -25,7 +27,15 @@ logger = cfg.get_logger("AgentLogger")
 
 
 class Agent(ABC):
-    def __init__(self, name, input, output_schema, tools: list = [], max_retries=1):
+    def __init__(
+        self,
+        name,
+        input,
+        output_schema,
+        tools: list = [],
+        max_retries=1,
+        session_id=None,
+    ):
         self.name = name
         self.input = input
         self.output_schema: BaseModel = output_schema
@@ -33,7 +43,7 @@ class Agent(ABC):
         self.model = None
         self.config = Config()
         self.traces = []
-        self.session_id = uuid.uuid4()
+        self.session_id = session_id if session_id else uuid.uuid4()
         self.trace_file = (
             self.config.config_dir / f"trace_{self.session_id}" / f"{self.name}.json"
         )
@@ -86,6 +96,7 @@ class Agent(ABC):
         )
         with open(self.trace_file, save_mode) as f:
             json.dump(self.traces, f, indent=4)
+            logger.info(f"Trace for {self.name} saved to {self.trace_file}")
 
     def done(self):
         self.state_transition("DONE")
@@ -97,7 +108,7 @@ class Agent(ABC):
         to_json = kwargs.get("to_json", False)
         try:
             self.model = Model(system_prompt=self.prompts.system_prompt)
-            response = self.model.call(
+            response, extra_response = self.model.call(
                 self.prompts.user_prompt, output_schema=self.get_json_schema()
             )
             choice = response.choices[0]
@@ -105,26 +116,41 @@ class Agent(ABC):
             self.store_trace(choice.model_dump())
             self.state_transition("GENERATION")
             msg = choice.message.content.strip()
-            return (
-                msg if not to_json else validate_schema_and_fix(msg, self.output_schema)
+            msg = (
+                msg
+                if not to_json
+                else validate_schema_and_fix(
+                    msg, self.output_schema, session_id=self.session_id
+                )
             )
+            return (msg, extra_response)
         except Exception as e:
             logger.error(f"Error occurred while triggering run for {self.name}: {e}")
             self.state_transition("ERROR")
-            return None
+            return None, extra_response
 
     def run(self, to_json=False):
         for attempt in range(1, self.max_retries + 1):
-            msg = self._trigger_run(to_json=to_json)
+            msg, extra_response = self._trigger_run(to_json=to_json)
             if msg:
                 logger.info(
                     f"{self.name} succeeded (attempt={attempt}/max_retries={self.max_retries})"
                 )
+                self.done()
                 return msg
             if attempt < self.max_retries:
-                logger.info(
-                    f"Retrying {self.name} (attempt={attempt}/max_retries={self.max_retries})"
+                # if retry_after in extra response, then use that
+                # retry with full jitter otherwise
+                delay = min(30, 2 ** (attempt - 1))  # 1s, 2s, 4s… capped at 30s
+                sleep = (
+                    extra_response.get("retry_after")
+                    if extra_response.get("retry_after", None)
+                    else random.uniform(0.1, delay)  # jitter
                 )
+                logger.info(
+                    f"Retrying {self.name} after {sleep}s (attempt={attempt} max_retries={self.max_retries})"
+                )
+                time.sleep(sleep)
         logger.error(f"{self.name} failed after {self.max_retries} attempt(s).")
         return None
 
@@ -139,14 +165,16 @@ class Agent(ABC):
             return None
 
 
-def validate_schema_and_fix(jsons_msg, schema: BaseModel, max_retries=3):
+def validate_schema_and_fix(
+    jsons_msg, schema: BaseModel, max_retries=3, session_id=None
+):
     error_logs = []
     parsed = None
     # try parsing json
     try:
         parsed = json.loads(jsons_msg)
     except Exception as e:
-        error_logs.append(e)
+        error_logs.append(f"{__name__}: {e}")
 
     # validate json schema with the model
     if parsed is not None:
@@ -161,6 +189,7 @@ def validate_schema_and_fix(jsons_msg, schema: BaseModel, max_retries=3):
         output_schema=schema,
         error_logs=error_logs,
         max_retries=max_retries,
+        session_id=session_id,
     )
     return agent.run_once(True)
 
@@ -172,56 +201,99 @@ class RetrySchemaAgent(Agent):
         output_schema: BaseModel,
         max_retries=3,
         error_logs: str | list[str] = "",
+        session_id=None,
     ):
         self.instance_id = uuid.uuid4()
         self.name = "RetrySchemaAgent_" + str(self.instance_id)
         self.output_schema = output_schema
         self.prompts = RetrySchemaAgPrompt(input, output_schema, error_logs=error_logs)
-        super().__init__(self.name, input, self.output_schema, max_retries=max_retries)
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
 
 
 class QuestionAnalyzerAgent(Agent):
-    def __init__(self, input, max_retries=1):
+    def __init__(self, input, max_retries=1, session_id=None):
         self.instance_id = uuid.uuid4()
         self.name = "QuestionAnalyzerAgent_" + str(self.instance_id)
         self.prompts = QuestionAnalyzerAgPrompt(input)
         self.output_schema = QuestionAnalysisAgSchema()
-        super().__init__(self.name, input, self.output_schema, max_retries=max_retries)
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
 
 
 class HypothesisAgent(Agent):
-    def __init__(self, input, analysis=None, clarification=None, max_retries=1):
+    def __init__(
+        self, input, analysis=None, clarification=None, max_retries=1, session_id=None
+    ):
         self.instance_id = uuid.uuid4()
         self.name = "HypothesisAgent_" + str(self.instance_id)
         self.prompts = HypothesisAgPrompt(
             input, analysis=analysis, clarification=clarification
         )
         self.output_schema = ManyHypothesesAgSchema()
-        super().__init__(self.name, input, self.output_schema, max_retries=max_retries)
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
 
 
 class ResearchPlanner(Agent):
-    def __init__(self, input: str, hypothesis: ManyHypothesesAgSchema = [], max_retries=1):
+    def __init__(
+        self,
+        input: str,
+        hypothesis: ManyHypothesesAgSchema = [],
+        max_retries=1,
+        session_id=None,
+    ):
         self.instance_id = uuid.uuid4()
         self.name = "ResearchPlannerAgent_" + str(self.instance_id)
         self.hypothesis = hypothesis
         self.prompts = ResearchPlannerAgPrompt(question=input, hypothesis=hypothesis)
         self.output_schema = ManyResearchPlannerAgSchema()
-        super().__init__(self.name, input, self.output_schema, max_retries=max_retries)
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
 
 
 class ResearchTask(Agent):
     def __init__(
-        self, input: str, plans: list = [], tools: list = [], max_retries=1
+        self,
+        input: str,
+        plans: list = [],
+        tools: list = [],
+        max_retries=1,
+        session_id=None,
     ):
         self.instance_id = uuid.uuid4()
         self.name = "ResearchTaskAgent_" + str(self.instance_id)
         self.tools = tools
-        self.prompts = ResearchTaskAgPrompt(
-            question=input, plans=plans, tools=tools
-        )
+        self.prompts = ResearchTaskAgPrompt(question=input, plans=plans, tools=tools)
         self.output_schema = ManyResearchTaskAgSchema()
-        super().__init__(self.name, input, self.output_schema, self.tools, max_retries=max_retries)
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            self.tools,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
 
 
 if __name__ == "__main__":

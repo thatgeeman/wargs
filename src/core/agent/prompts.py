@@ -333,7 +333,7 @@ Produce the research tasks needed to execute the plans above.
         tools = tool if isinstance(tool, list) else [tool]
         result = ""
         for t in tools:
-            name = getattr(t, "name", str(t))
+            name = getattr(t, "tool_name", None) or getattr(t, "name", str(t))
             try:
                 schema = (
                     t.schema()

@@ -1,5 +1,3 @@
-from .store import WebSearch 
+from .store import WebSearch
 
-__all__ = [
-    "WebSearch"
-]
+__all__ = ["WebSearch"]

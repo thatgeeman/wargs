@@ -10,20 +10,28 @@ cfg = Config()
 sm = SecretsManager()
 logger = cfg.get_logger("ToolLogger")
 
-REGISTERED_TOOLS = []  # should instantiate each tool in this module
+REGISTERED_TOOLS = {}  # stable tool name -> tool class
 
 
 class Tool:
-    def __init__(self, name):
-        self.name = name
+    tool_name = None  # stable registry name, set by subclasses
+
+    def __init__(self, name, session_id=None):
+        self.instance_id = uuid.uuid4()
+        self.name = f"{name}_" + str(self.instance_id)
         self.config = Config()
         self.state = "INIT"
         self.traces = []
-        self.session_id = uuid.uuid4()
+        self.session_id = session_id if session_id else uuid.uuid4()
         self.trace_file = (
             self.config.config_dir / f"trace_{self.session_id}" / f"{self.name}.json"
         )
-        self._register_tool()
+
+    def __init_subclass__(cls, **kwargs):
+        """Register any Tool which is subclassed"""
+        super().__init_subclass__(**kwargs)
+        if cls.tool_name:
+            REGISTERED_TOOLS[cls.tool_name] = cls
 
     @abstractmethod
     def run(self, input):
@@ -65,13 +73,12 @@ class Tool:
         with open(self.trace_file, save_mode) as f:
             json.dump(self.traces, f, indent=4)
 
-    def _register_tool(self):
-        REGISTERED_TOOLS.extend([self.name])
-
 
 class WebSearch(Tool):
-    def __init__(self):
-        super().__init__("WebSearch")
+    tool_name = "WebSearch"
+
+    def __init__(self, session_id=None):
+        super().__init__("WebSearch", session_id=session_id)
         self.secret = SecretsManager().get_secret("WG_TAVILY_API_KEY")
         self.client = TavilyClient(self.secret)
 
@@ -97,7 +104,3 @@ class WebSearch(Tool):
 
     def schema(self):
         return signature(self.client.search)
-
-
-# register tool Once
-WebSearch()

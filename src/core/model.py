@@ -1,7 +1,7 @@
 import os
 
 from dotenv import load_dotenv
-from openai import APITimeoutError, OpenAI
+from openai import APIStatusError, APITimeoutError, OpenAI
 
 from ..config import Config
 
@@ -52,6 +52,7 @@ class Model(ModelConfig):
                 f"Calling model '{self.model_name}' with output schema: {output_schema}"
             )
         response = None
+        extra_response = {}
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
@@ -69,13 +70,27 @@ class Model(ModelConfig):
                 response_format=output_schema,
                 timeout=self.timeout_s,
             )
-        except APITimeoutError:
-            logger.error(f"Model (OpenAI) call timed out (max: {self.timeout_s})")
+        except APITimeoutError as e:
+            logger.error(f"Model (OpenAI) call timed out (max: {self.timeout_s}): {e}")
             raise
+        except APIStatusError as e:
+            if e.status_code == 429:
+                # retryable — respect Retry-After if the server sends it
+                retry_after = e.response.headers.get("retry-after")
+                logger.warning(f"Rate limited, retry-after: {retry_after}")
+                extra_response["retry_after"] = retry_after
+            elif 400 <= e.status_code < 500:
+                # permanent — retrying will never help, fail fast
+                logger.error(f"Permanent client error {e.status_code}: {e.message}")
+                raise APIStatusError(e)
+            else:
+                # 5xx — transient, retryable
+                logger.warning(f"Server error {e.status_code}")
+                extra_response["status_code"] = e.status_code
         except Exception as e:
             logger.error(f"Model call exception: {e}")
-            raise e
-        return response
+            raise
+        return response, extra_response
 
 
 if __name__ == "__main__":

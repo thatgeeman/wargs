@@ -1,4 +1,3 @@
-
 import logging
 import os
 import pathlib
@@ -7,11 +6,14 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
 
+
 class Config:
     config_dir = pathlib.Path.home() / ".wahrgus"
 
-    log_level = logging.DEBUG
-    log_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_level = logging.INFO
+    log_format = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
     log_handler = logging.StreamHandler()
 
     def get_logger(self, name):
@@ -24,6 +26,7 @@ class Config:
 
 class SecretsManager:
     """Stores env vars that start with 'WG_' and provides access to them."""
+
     def __init__(self):
         self.secrets = {}
         self.config = Config()
@@ -34,8 +37,12 @@ class SecretsManager:
         try:
             return self.secrets[key]
         except KeyError:
-            self.logger.error(f"Secret '{key}' not found. Ensure it is set in the environment variables and starts with 'WG_'.")
-            raise KeyError(f"Secret '{key}' not found. Ensure it is set in the environment variables and starts with 'WG_'.")
+            self.logger.error(
+                f"Secret '{key}' not found. Ensure it is set in the environment variables and starts with 'WG_'."
+            )
+            raise KeyError(
+                f"Secret '{key}' not found. Ensure it is set in the environment variables and starts with 'WG_'."
+            )
 
     def load_secrets(self):
         for key, value in os.environ.items():

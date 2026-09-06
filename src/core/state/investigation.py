@@ -1,12 +1,18 @@
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-
-
 import json
 import uuid
+from abc import ABC
+
 
 class InvestigationState(ABC):
-    def __init__(self, question: str, hypotheses: list, evidence: list, sources: list, contradictions: list, current_step: int):
+    def __init__(
+        self,
+        question: str,
+        hypotheses: list,
+        evidence: list,
+        sources: list,
+        contradictions: list,
+        current_step: int,
+    ):
         self.question = question
         self.hypotheses = hypotheses
         self.evidence = evidence
@@ -14,7 +20,7 @@ class InvestigationState(ABC):
         self.contradictions = contradictions
         self.current_step = current_step
         self.status = None
-        self.budget = None 
+        self.budget = None
 
         self._session_id = str(uuid.uuid4())
 
@@ -27,7 +33,7 @@ class InvestigationState(ABC):
             "contradictions": self.contradictions,
             "current_step": self.current_step,
             "status": self.status,
-            "budget": self.budget
+            "budget": self.budget,
         }
         return json.dumps(data)
 
@@ -40,12 +46,12 @@ class InvestigationState(ABC):
             evidence=data["evidence"],
             sources=data["sources"],
             contradictions=data["contradictions"],
-            current_step=data["current_step"]
+            current_step=data["current_step"],
         )
 
     @classmethod
     def from_path(cls, path: str):
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             json_str = f.read()
         return cls.from_json(json_str)
 
@@ -59,9 +65,9 @@ class InvestigationState(ABC):
             "contradictions": self.contradictions,
             "current_step": self.current_step,
             "status": self.status,
-            "budget": self.budget
+            "budget": self.budget,
         }
         if path:
-            with open(path, 'w') as f:
+            with open(path, "w") as f:
                 json.dump(trace, f, indent=4)
         return json.dumps(trace, indent=4)

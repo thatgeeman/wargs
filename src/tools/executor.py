@@ -6,11 +6,14 @@ logger = cfg.get_logger("ToolExecutorLogger")
 
 
 class ToolExecutor:
-    def __init__(self, name: str, parameters: dict):
-        assert name in REGISTERED_TOOLS, (
-            f"Tool not registered: {name} not in  {REGISTERED_TOOLS}"
-        )
-        self.name = name
+    def __init__(self, name: str, parameters: dict, session_id=None):
+        if name not in REGISTERED_TOOLS:
+            raise KeyError(
+                f"Tool not registered: '{name}'. Available: {list(REGISTERED_TOOLS)}"
+            )
+        self.session_id = session_id if session_id else uuid.uuid4()
+        self.tool_name = name
+        self.name = f"{name}_{self.session_id}"
         self.parameters = parameters
         self.result = None
 
@@ -18,22 +21,10 @@ class ToolExecutor:
         self._trigger_run()
 
     def _trigger_run(self):
-        tool_ref = None
-        tool_instance = None
-        try:
-            tool_ref = eval(self.name)
-            tool_instance = tool_ref()
-        except (ImportError, AttributeError) as e:
-            logger.error(f"Failed Import of Tool: {e}")
-        except Exception as e:
-            logger.error(f"Exception: {e}")
-        finally:
-            if tool_instance is not None:
-                logger.info(f"Running {self.name}.")
-                result = tool_instance.run(**self.parameters)
-                self.result = result
-            else:
-                self.result = None
+        tool_cls = REGISTERED_TOOLS[self.tool_name]
+        tool_instance = tool_cls(session_id=self.session_id)
+        logger.info(f"Running {self.name}.")
+        self.result = tool_instance.run(**self.parameters)
 
 
 if __name__ == "__main__":

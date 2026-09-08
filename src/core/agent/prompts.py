@@ -158,7 +158,9 @@ Instructions:
 
 
 class ResearchPlannerAgPrompt(PromptClass):
-    def __init__(self, question, hypothesis: ManyHypothesesAgSchema = [], evaluation=None):
+    def __init__(
+        self, question, hypothesis: ManyHypothesesAgSchema = [], evaluation=None
+    ):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
         self.question = question
@@ -306,10 +308,12 @@ You DO:
   results described in the plan — the goal is evidence that discriminates between
   hypotheses, not evidence that merely confirms the leading one
 
-Parameters vs constraints:
-- parameters = the content of the tool call, matching the tool's signature
-  (e.g. query, topic)
-- constraints = execution limits for the executor to enforce (e.g. max_results)
+Parameters:
+- parameters = the full content of the tool call, matching the tool's signature
+  (e.g. query, topic, max_results)
+- emit parameters as a JSON-encoded object string, e.g.
+  "{{\"query\": \"nvidia q2 revenue\", \"max_results\": 5}}"
+- do not add any other top-level keys to the task — only the fields in the schema
 
 If a plan cannot be executed with the available tools, skip it rather than forcing
 an unsuitable tool call.
@@ -384,8 +388,142 @@ Produce the research tasks needed to execute the plans above.
         return str(evaluation)
 
 
+class DecisionAgPrompt(PromptClass):
+    def __init__(
+        self,
+        question,
+        clarification=None,
+        hypothesis=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+        evaluation=None,
+    ):
+        super().__init__()
+        self.date = datetime.now().strftime("%Y-%m-%d")
+        self.question = question
+        self.clarification = clarification or "No clarification provided."
+        self.hypothesis = self.get_formatted_hypotheses(hypothesis)
+        self.plans = self.get_formatted_items(plans)
+        self.tasks = self.get_formatted_items(tasks)
+        self.evidence = self.get_formatted_items(evidence)
+        self.evaluation = self.get_formatted_items(evaluation)
+        self.system_prompt = f"""
+You are the Decision Agent in an autonomous investigation system.
+Today's date is {self.date}.
+
+The investigation has gathered evidence by executing research tasks. A separate
+evaluator has judged each evidence item's relevance and impact, and the harness
+has already updated hypothesis confidences and plan statuses accordingly. Your
+job is to decide what happens NEXT. You do not gather evidence, evaluate it, or
+update hypotheses — the step you spawn does that based on your decision.
+
+You DO:
+- decide the next step of the investigation based on the gathered evidence,
+  the evaluation, and current hypothesis confidence
+- choose exactly one action:
+  - CHALLENGE: spawn the Contradiction Agent to search for counterevidence
+    against the LEADING hypothesis. Choose when a hypothesis leads but has
+    not been stress-tested yet.
+  - REFINE_PLAN: spawn the Research Planner to create new research plans.
+    Choose when evidence contradicted current beliefs or no ACTIVE plans
+    remain. Existing plans are immutable and kept for history — new plans
+    are appended, old objectives are never rewritten.
+  - REASSESS: spawn the Research Task Agent to define new tasks for the
+    existing, still-ACTIVE plans. Choose when the objective is unchanged but
+    the evidence gathered so far was insufficient or low quality.
+  - FINISH: stop the investigation and finalize the results into a
+    human-consumable report. Choose when hypothesis confidence is high
+    enough, evidence is sufficient, or further research shows diminishing
+    returns.
+- give concrete, actionable FEEDBACK for the agent you spawn: what to target,
+  why this decision was made, which angles were not covered
+- select the hypotheses (focus_hypotheses) the next step should concentrate
+  on — select only, never update them
+
+You do NOT:
+- answer the investigation question
+- invent evidence that was not gathered
+- update, re-rank, or re-score hypotheses
+- treat hypotheses as facts
+
+Return only the requested structured output.
+"""
+        self.user_prompt = f"""
+INVESTIGATION QUESTION
+{self.question}
+
+
+USER CLARIFICATION
+{self.clarification}
+
+
+HYPOTHESES
+{self.hypothesis}
+
+
+RESEARCH PLANS
+{self.plans}
+
+
+EXECUTED TASKS
+{self.tasks}
+
+
+GATHERED EVIDENCE
+{self.evidence}
+
+EVALUATION 
+{self.evaluation}
+
+"""
+        logger.debug(f"User Prompt for DecisionAgent:\n{self.user_prompt}")
+
+    def get_formatted_items(self, items):
+        """Render plans/tasks/evidence (BaseModel, dict or str) as readable text."""
+        if not items:
+            return "None provided."
+        entries = items if isinstance(items, list) else [items]
+        result = ""
+        for item in entries:
+            if isinstance(item, BaseModel):
+                item = item.model_dump()
+            if isinstance(item, dict):
+                for key, value in item.items():
+                    result += f"{key}: {value}\n"
+            else:
+                result += f"{item}\n"
+            result += "\n"
+        return result.strip()
+
+    def get_formatted_hypotheses(self, hypotheses):
+        """Render hypotheses with confidence and their supporting/weakening predictions."""
+        if not hypotheses:
+            return "No hypotheses provided."
+        entries = hypotheses if isinstance(hypotheses, list) else [hypotheses]
+        result = ""
+        for h in entries:
+            result += (
+                f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
+            )
+            for e in getattr(h, "supporting_predictions", []):
+                result += f"  Supporting prediction: {e}\n"
+            for e in getattr(h, "weakening_predictions", []):
+                result += f"  Weakening prediction: {e}\n"
+            result += "\n"
+        return result.strip()
+
+
 class EvidenceEvaluatorAgPrompt(PromptClass):
-    def __init__(self, question, clarification=None, hypothesis=None, plans=None, tasks=None, evidence=None):
+    def __init__(
+        self,
+        question,
+        clarification=None,
+        hypothesis=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+    ):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
         self.question = question
@@ -484,7 +622,9 @@ iteration.
         entries = hypotheses if isinstance(hypotheses, list) else [hypotheses]
         result = ""
         for h in entries:
-            result += f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
+            result += (
+                f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
+            )
             for e in getattr(h, "supporting_predictions", []):
                 result += f"  Supporting prediction: {e}\n"
             for e in getattr(h, "weakening_predictions", []):

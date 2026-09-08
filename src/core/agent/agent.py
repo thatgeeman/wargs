@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from ...config import Config
 from ..model import Model
 from .prompts import (
+    DecisionAgPrompt,
     EvidenceEvaluatorAgPrompt,
     HypothesisAgPrompt,
     QuestionAnalyzerAgPrompt,
@@ -17,6 +18,7 @@ from .prompts import (
     RetrySchemaAgPrompt,
 )
 from .schemas import (
+    DecisionAgSchema,
     EvidenceEvaluationAgSchema,
     ManyHypothesesAgSchema,
     ManyResearchPlannerAgSchema,
@@ -65,14 +67,75 @@ class Agent(ABC):
             )
         except AssertionError as e:
             logger.error(e)
+        schema = self.output_schema.model_json_schema()
+        self._strip_content_schema(schema)
+        self._strip_harness_only_fields(schema)
+        self._require_all_fields(schema)
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": self.name,
-                "schema": self.output_schema.model_json_schema(),
+                "schema": schema,
                 "strict": True,
             },
         }
+
+    @staticmethod
+    def _strip_harness_only_fields(node):
+        """Remove fields marked harness-only (json_schema_extra harness_only)
+        from the wire schema: the LLM never sees fields it must not fill
+        (e.g. result). The fields stay on the Python model for the harness."""
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict):
+                for key in [
+                    k
+                    for k, v in props.items()
+                    if isinstance(v, dict) and v.get("harness_only")
+                ]:
+                    del props[key]
+                    if (
+                        isinstance(node.get("required"), list)
+                        and key in node["required"]
+                    ):
+                        node["required"].remove(key)
+            for value in node.values():
+                Agent._strip_harness_only_fields(value)
+        elif isinstance(node, list):
+            for value in node:
+                Agent._strip_harness_only_fields(value)
+
+    @staticmethod
+    def _require_all_fields(node):
+        """Declare all properties required in the wire schema. With
+        all-optional fields, '{}' is schema-valid and constrained decoders can
+        emit it as the minimal object; requiring every field makes empty
+        responses impossible for grammar-constrained backends. Python-side
+        defaults (and validation) are unaffected — this only shapes what the
+        model must produce."""
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict) and props:
+                node["required"] = list(props.keys())
+            for value in node.values():
+                Agent._require_all_fields(value)
+        elif isinstance(node, list):
+            for value in node:
+                Agent._require_all_fields(value)
+
+    @staticmethod
+    def _strip_content_schema(node):
+        """Remove contentSchema/contentMediaType metadata (emitted by
+        Json[...] fields): strict endpoints reject both. Pydantic still
+        validates the string's content at parse time."""
+        if isinstance(node, dict):
+            node.pop("contentSchema", None)
+            node.pop("contentMediaType", None)
+            for value in node.values():
+                Agent._strip_content_schema(value)
+        elif isinstance(node, list):
+            for value in node:
+                Agent._strip_content_schema(value)
 
     def store_trace(self, trace_data: dict):
         if not isinstance(trace_data, dict):
@@ -108,6 +171,7 @@ class Agent(ABC):
     def _trigger_run(self, **kwargs):
         logger.info(f"Running {self.name} with input: {self.input}")
         to_json = kwargs.get("to_json", False)
+        extra_response = {}  # may never be assigned by model.call if it raises
         try:
             self.model = Model(system_prompt=self.prompts.system_prompt)
             response, extra_response = self.model.call(
@@ -167,12 +231,19 @@ class Agent(ABC):
                 )
                 time.sleep(sleep)
         logger.error(f"{self.name} failed after {self.max_retries} attempt(s).")
+        # save the trace on failure too — the raw responses of failed attempts
+        # are exactly what's needed for debugging
+        self.state_transition("FAILED")
+        self.save_trace()
         return None
 
     def run_once(self, to_json=False):
         try:
             result = self.run(to_json=to_json)
-            self.done()
+            if result is not None:
+                # run() already handles failure (FAILED state + trace saved);
+                # only mark DONE on success
+                self.done()
             return result
         except Exception as e:
             logger.error(f"Error occurred while running {self.name}: {e}")
@@ -194,7 +265,19 @@ def validate_schema_and_fix(
     # validate json schema with the model
     if parsed is not None:
         try:
-            return schema.model_validate(parsed)
+            validated = schema.model_validate(parsed)
+            if not validated.model_fields_set - {"reasoning"}:
+                # Empty object '{}' or reasoning-only: validates only because
+                # every field has a default (pydantic does not validate
+                # defaults), but contains no payload content. Schema-fixing
+                # would have to invent content — treat as a failed generation
+                # so the agent retries from scratch instead.
+                logger.warning(
+                    "Model returned no payload (empty object or reasoning only). "
+                    "Treating as failed generation."
+                )
+                return None
+            return validated
         except Exception as e:
             error_logs.append(e)
 
@@ -350,6 +433,43 @@ class EvidenceEvaluator(Agent):
         # auto-run (executor-style): evaluation is available right after construction
         result = self.run(to_json=True)
         self.evaluation = result.model_dump() if result else {}
+
+
+class DecisionAgent(Agent):
+    def __init__(
+        self,
+        input: str,
+        clarification=None,
+        hypothesis=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+        evaluation=None,
+        max_retries=1,
+        session_id=None,
+    ):
+        self.instance_id = uuid.uuid4()
+        self.name = "DecisionAgent_" + str(self.instance_id)
+        self.prompts = DecisionAgPrompt(
+            question=input,
+            clarification=clarification,
+            hypothesis=hypothesis,
+            plans=plans,
+            tasks=tasks,
+            evidence=evidence,
+            evaluation=evaluation,
+        )
+        self.output_schema = DecisionAgSchema()
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
+        # auto-run (executor-style): evaluation is available right after construction
+        result = self.run(to_json=True)
+        self.decision = result.model_dump() if result else {}
 
 
 if __name__ == "__main__":

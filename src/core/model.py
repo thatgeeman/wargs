@@ -27,11 +27,12 @@ class ModelConfig:
 class Model(ModelConfig):
     def __init__(
         self,
-        model_name: str = "google/gemma-3-27b-it",
+        # model_name: str = "google/gemma-3-27b-it",
+        model_name: str = "google/gemma-4-31B-it",
         system_prompt: str = "",
         temperature: float = 0,
         max_tokens: int = 4096,
-        reasoning_effort: str = "medium",
+        reasoning_effort: str = None,
     ):
         super().__init__()
         self.model_name = model_name
@@ -64,14 +65,18 @@ class Model(ModelConfig):
         messages.append({"role": "user", "content": prompt})
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                reasoning_effort=self.reasoning_effort,
-                response_format=output_schema,
-            )
+            request = {
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+                "response_format": output_schema,
+            }
+            if self.reasoning_effort:
+                # off by default: reasoning channels can starve the structured
+                # output (model answers in 'reasoning', emits '{}' in 'content')
+                request["reasoning_effort"] = self.reasoning_effort
+            response = self.client.chat.completions.create(**request)
         except APITimeoutError as e:
             logger.error(f"Model (OpenAI) call timed out (max: {self.timeout_s}): {e}")
             raise
@@ -84,7 +89,7 @@ class Model(ModelConfig):
             elif 400 <= e.status_code < 500:
                 # permanent — retrying will never help, fail fast
                 logger.error(f"Permanent client error {e.status_code}: {e.message}")
-                raise APIStatusError(e)
+                raise
             else:
                 # 5xx — transient, retryable
                 logger.warning(f"Server error {e.status_code}")

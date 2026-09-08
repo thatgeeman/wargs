@@ -1,9 +1,20 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, Json
 
 
-class QuestionAnalysisAgSchema(BaseModel):
+class StrictSchema(BaseModel):
+    # extra="forbid" makes pydantic emit "additionalProperties": false in the
+    # JSON schema — required by strict structured-output endpoints — and also
+    # rejects unexpected keys when validating model output.
+    model_config = ConfigDict(extra="forbid")
+
+
+class QuestionAnalysisAgSchema(StrictSchema):
+    reasoning: str = Field(
+        default="",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+    )
     investigation_type: str = Field(
         default="",
         description="The kind of investigation the question requires (e.g. comparative evaluation, causal explanation, fact verification, trend analysis)",
@@ -29,7 +40,7 @@ class QuestionAnalysisAgSchema(BaseModel):
     )
 
 
-class HypothesisAgSchema(BaseModel):
+class HypothesisAgSchema(StrictSchema):
     id: int = Field(..., ge=1, description="Integer ID to identify this hypothesis")
     hypothesis: str = Field(
         ..., description="A single hypothesis that could explain the phenomenon"
@@ -51,7 +62,11 @@ class HypothesisAgSchema(BaseModel):
     )
 
 
-class ManyHypothesesAgSchema(BaseModel):
+class ManyHypothesesAgSchema(StrictSchema):
+    reasoning: str = Field(
+        default="",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+    )
     hypotheses: list[HypothesisAgSchema] = Field(
         default_factory=list,
         min_length=1,
@@ -59,7 +74,7 @@ class ManyHypothesesAgSchema(BaseModel):
     )
 
 
-class ToolSchema(BaseModel):
+class ToolSchema(StrictSchema):
     name: str = Field(..., description="Name of the tool")
     parameters: dict = Field(
         default_factory=dict,
@@ -67,7 +82,7 @@ class ToolSchema(BaseModel):
     )
 
 
-class ResearchPlannerAgSchema(BaseModel):
+class ResearchPlannerAgSchema(StrictSchema):
     id: str = Field(
         ...,
         description="Unique identifier for this plan, formatted as 'RP-001', 'RP-002', ...",
@@ -96,7 +111,11 @@ class ResearchPlannerAgSchema(BaseModel):
     )
 
 
-class ManyResearchPlannerAgSchema(BaseModel):
+class ManyResearchPlannerAgSchema(StrictSchema):
+    reasoning: str = Field(
+        default="",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+    )
     plans: list[ResearchPlannerAgSchema] = Field(
         default_factory=list,
         min_length=1,
@@ -104,7 +123,7 @@ class ManyResearchPlannerAgSchema(BaseModel):
     )
 
 
-class ResearchTaskAgSchema(BaseModel):
+class ResearchTaskAgSchema(StrictSchema):
     id: str = Field(
         ...,
         description="Unique identifier for this task execution (e.g. 'RT-001', 'RT-002')",
@@ -115,17 +134,22 @@ class ResearchTaskAgSchema(BaseModel):
     tool: str = Field(
         ..., description="Name of the tool to call. Must be one of the available tools."
     )
-    parameters: dict = Field(
+    parameters: Json[dict] = Field(
         default_factory=dict,
-        description="Exact parameter values for the tool call, matching the tool's signature",
+        description='Exact parameter values for the tool call, matching the tool\'s signature, encoded as a JSON object string (e.g. \'{"query": "nvidia revenue", "max_results": 5}\')',
     )
     result: dict = Field(
         default={},
-        description="Result after executing this task. Not to be filled by an LLM.",
+        description="Result after executing this task. Populated by the harness, never sent to the LLM.",
+        json_schema_extra={"harness_only": True},
     )
 
 
-class ManyResearchTaskAgSchema(BaseModel):
+class ManyResearchTaskAgSchema(StrictSchema):
+    reasoning: str = Field(
+        default="",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+    )
     tasks: list[ResearchTaskAgSchema] = Field(
         default_factory=list,
         min_length=1,
@@ -134,7 +158,7 @@ class ManyResearchTaskAgSchema(BaseModel):
     )
 
 
-class SingleEvidenceEvaluationAgSchema(BaseModel):
+class SingleEvidenceEvaluationAgSchema(StrictSchema):
     evidence_id: str = Field(
         default="",
         description="ID of the evidence item being evaluated (the ID of the task that produced it, e.g. 'RT-001')",
@@ -147,9 +171,11 @@ class SingleEvidenceEvaluationAgSchema(BaseModel):
         default="",
         description="Why this evidence item is or is not relevant to the question and plans",
     )
-    evidence_impact: Literal["supporting", "weakening", "contradictory", "neutral"] = Field(
-        default="neutral",
-        description="What this evidence item does to current beliefs: supporting = strengthens at least one hypothesis; weakening = reduces confidence in at least one hypothesis; contradictory = directly conflicts with a hypothesis, an alternative must be investigated; neutral = relevant but insufficient to change confidence in any hypothesis",
+    evidence_impact: Literal["supporting", "weakening", "contradictory", "neutral"] = (
+        Field(
+            default="neutral",
+            description="What this evidence item does to current beliefs: supporting = strengthens at least one hypothesis; weakening = reduces confidence in at least one hypothesis; contradictory = directly conflicts with a hypothesis, an alternative must be investigated; neutral = relevant but insufficient to change confidence in any hypothesis",
+        )
     )
     impact_reasoning: str = Field(
         default="",
@@ -157,7 +183,11 @@ class SingleEvidenceEvaluationAgSchema(BaseModel):
     )
 
 
-class EvidenceEvaluationAgSchema(BaseModel):
+class EvidenceEvaluationAgSchema(StrictSchema):
+    reasoning: str = Field(
+        default="",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+    )
     evaluations: list[SingleEvidenceEvaluationAgSchema] = Field(
         default_factory=list,
         min_length=1,
@@ -166,4 +196,23 @@ class EvidenceEvaluationAgSchema(BaseModel):
     feedback: str = Field(
         default="",
         description="Actionable feedback for the next iteration, aggregated across all evidence: what is still missing and what new plans or tasks should target",
+    )
+
+
+class DecisionAgSchema(StrictSchema):
+    reasoning: str = Field(
+        default="",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+    )
+    decision: Literal["CHALLENGE", "REFINE_PLAN", "REASSESS", "FINISH"] = Field(
+        default="FINISH",
+        description="The next step of the investigation. CHALLENGE = stress-test the leading hypothesis; REFINE_PLAN = new research plans (objective changed); REASSESS = new tasks for existing ACTIVE plans; FINISH = stop and report. Defaults to FINISH as the safe fallback.",
+    )
+    feedback: str = Field(
+        default="",
+        description="Actionable input for the spawned agent: what to target, why, which angles were not covered",
+    )
+    focus_hypotheses: list[int] = Field(
+        default_factory=list,
+        description="IDs of the hypotheses the next step should concentrate on",
     )

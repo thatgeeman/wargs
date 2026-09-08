@@ -8,6 +8,7 @@ from ...helpers import run_with_timeout
 from ...tools.executor import ToolExecutor
 from ...tools.store import WebSearch
 from ..agent import (
+    DecisionAgent,
     EvidenceEvaluator,
     HypothesisAgent,
     ManyHypothesesAgSchema,
@@ -28,7 +29,7 @@ class BaseState(ABC):
     def __init__(self, name, session_id=None):
         self.session_id = session_id if session_id else uuid.uuid4()
         self.name = f"{name}_{self.session_id}"  # modify name to unique name for state
-        self.state = "INIT"
+        self.state = "INIT"  # last state is AGENT_DONE
         self.current_step = 1
         self.max_steps = 10  # Default max steps, can be adjusted as needed
         self.timeout_perstep_s = 300
@@ -62,6 +63,9 @@ class InvestigationState(BaseState):
         self.evidence_impact = None
         self.contradictions = []
         self.events = []
+        self.decision = {}
+        self.next_action = None
+        self.max_iterations = 5  # harness-side cap on the decision loop
         self.max_retries = 3
 
     def analyze_question(self):
@@ -341,7 +345,10 @@ class InvestigationState(BaseState):
                 max_retries=self.max_retries,
                 session_id=self.session_id,
             )
-            self.evidence_evaluation = ee.evaluation
+            self.evidence_evaluation = ee.evaluation  # model_dump dict
+            logger.info(
+                f"Evaluation of Evidences gathered complete: {self.evidence_evaluation}"
+            )
         else:
             logger.error("Evidence is empty. Cannot be evaluated")
             raise AttributeError
@@ -370,6 +377,58 @@ class InvestigationState(BaseState):
             return self.generate_research_plan(evaluation=self.evidence_evaluation)
         # neutral / insufficient -> more evidence needed, same objective
         return self.generate_research_task(evaluation=self.evidence_evaluation)
+
+    def decision_agent(self):
+        da = DecisionAgent(
+            input=self.question,
+            clarification=self.clarification,
+            hypothesis=self.hypotheses,
+            plans=self.research_plans,
+            tasks=self.research_tasks,
+            evidence=self.evidence,
+            evaluation=self.evidence_evaluation,
+            max_retries=self.max_retries,
+            session_id=self.session_id,
+        )
+        # DecisionAgent auto-runs on construction; .decision is already a dict
+        self.decision = da.decision
+        self.next_action = self.decision.get("decision")
+
+    def execute_decision(self):
+        logger.info(f"DecisionAgent to execute: {self.decision}")
+        feedback = self.decision  # carries feedback + focus_hypotheses
+        if self.next_action == "REFINE_PLAN":
+            self.generate_research_plan(evaluation=feedback)
+            self.generate_research_task(evaluation=feedback)
+        elif self.next_action == "REASSESS":
+            self.generate_research_task(evaluation=feedback)
+        elif self.next_action == "CHALLENGE":
+            logger.info("CHALLENGE: ContradictionAgent not built yet — skipping.")
+            return
+        else:
+            logger.warning(f"Unknown or missing action: {self.next_action}")
+            return
+        self.execute_research_task()
+        self.evaluate_evidence()
+
+    def agent_loop(self):
+        for iteration in range(1, self.max_iterations + 1):
+            self.decision_agent()
+            if self.next_action is None:
+                self.set_state("ERROR", reason="Decision agent returned no decision.")
+                break
+            if self.next_action == "FINISH":
+                self.set_state(
+                    "AGENT_DONE", reason="Decision agent finished the investigation."
+                )
+                break
+            self.execute_decision()
+        else:
+            self.set_state(
+                "AGENT_DONE",
+                reason=f"Max decision iterations reached ({self.max_iterations}).",
+            )
+        logger.info("Prepare report now.")
 
     def run_order(self):
         if self.state == "INIT" or self.current_step <= self.max_steps:
@@ -402,6 +461,18 @@ class InvestigationState(BaseState):
                         f"Investigation timed out @ {step_id}: {self.get_name(step_func)}"
                     )
                 self.current_step += 1
+
+            # handoff to the agentic loop — no retries: a timed-out loop must
+            # not be re-run from scratch
+            try:
+                run_with_timeout(
+                    self.agent_loop,
+                    self.timeout_perstep_s * 10,
+                    max_retries=1,
+                )
+            except TimeoutError:
+                logger.error("Agent loop timed out.")
+
         else:
             logger.info(
                 f"STOPPING: {self.state}, steps: {self.current_step}/{self.max_steps}"

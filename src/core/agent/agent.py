@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from ...config import Config
 from ..model import Model
 from .prompts import (
+    ContradictionAgPrompt,
     DecisionAgPrompt,
     EvidenceEvaluatorAgPrompt,
     HypothesisAgPrompt,
@@ -18,6 +19,7 @@ from .prompts import (
     RetrySchemaAgPrompt,
 )
 from .schemas import (
+    ContradictionAgSchema,
     DecisionAgSchema,
     EvidenceEvaluationAgSchema,
     ManyHypothesesAgSchema,
@@ -171,9 +173,19 @@ class Agent(ABC):
     def _trigger_run(self, **kwargs):
         logger.info(f"Running {self.name} with input: {self.input}")
         to_json = kwargs.get("to_json", False)
+        attempt = kwargs.get("attempt", 1)
         extra_response = {}  # may never be assigned by model.call if it raises
         try:
-            self.model = Model(system_prompt=self.prompts.system_prompt)
+            # first attempt stays deterministic (temperature=0); retries get
+            # increasing randomness so a failed generation isn't repeated
+            # verbatim — at temperature=0 every retry would be identical.
+            model_kwargs = {"temperature": min(0.3 * (attempt - 1), 0.9)}
+            if getattr(self, "_max_tokens_override", None):
+                # set by a previous truncated attempt (finish_reason='length')
+                model_kwargs["max_tokens"] = self._max_tokens_override
+            self.model = Model(
+                system_prompt=self.prompts.system_prompt, **model_kwargs
+            )
             response, extra_response = self.model.call(
                 self.prompts.user_prompt, output_schema=self.get_json_schema()
             )
@@ -187,10 +199,13 @@ class Agent(ABC):
             if choice.finish_reason == "length":
                 # Truncated by max_tokens — content is missing, so the schema
                 # fixer cannot repair it. Treat as a failed attempt and
-                # regenerate from scratch instead.
+                # regenerate from scratch with a doubled token budget (at
+                # temperature=0 an identical retry would truncate the same way).
+                self._max_tokens_override = min(self.model.max_tokens * 2, 32768)
                 logger.warning(
                     f"{self.name}: response truncated (finish_reason='length', "
-                    f"max_tokens={self.model.max_tokens}). Retrying generation."
+                    f"max_tokens={self.model.max_tokens}). Retrying generation "
+                    f"with max_tokens={self._max_tokens_override}."
                 )
                 return None, extra_response
             msg = choice.message.content.strip()
@@ -210,7 +225,7 @@ class Agent(ABC):
     def run(self, to_json=False):
         extra_response = {}
         for attempt in range(1, self.max_retries + 1):
-            msg, extra_response = self._trigger_run(to_json=to_json)
+            msg, extra_response = self._trigger_run(to_json=to_json, attempt=attempt)
             if msg:
                 logger.info(
                     f"{self.name} succeeded (attempt={attempt}/max_retries={self.max_retries})"
@@ -354,6 +369,7 @@ class ResearchPlanner(Agent):
         input: str,
         hypothesis: ManyHypothesesAgSchema = [],
         evaluation=None,
+        contradictions=None,
         max_retries=1,
         session_id=None,
     ):
@@ -361,7 +377,10 @@ class ResearchPlanner(Agent):
         self.name = "ResearchPlannerAgent_" + str(self.instance_id)
         self.hypothesis = hypothesis
         self.prompts = ResearchPlannerAgPrompt(
-            question=input, hypothesis=hypothesis, evaluation=evaluation
+            question=input,
+            hypothesis=hypothesis,
+            evaluation=evaluation,
+            contradictions=contradictions,
         )
         self.output_schema = ManyResearchPlannerAgSchema()
         super().__init__(
@@ -380,6 +399,7 @@ class ResearchTask(Agent):
         plans: list = [],
         tools: list = [],
         evaluation=None,
+        contradictions=None,
         max_retries=1,
         session_id=None,
     ):
@@ -387,7 +407,11 @@ class ResearchTask(Agent):
         self.name = "ResearchTaskAgent_" + str(self.instance_id)
         self.tools = tools
         self.prompts = ResearchTaskAgPrompt(
-            question=input, plans=plans, tools=tools, evaluation=evaluation
+            question=input,
+            plans=plans,
+            tools=tools,
+            evaluation=evaluation,
+            contradictions=contradictions,
         )
         self.output_schema = ManyResearchTaskAgSchema()
         super().__init__(
@@ -460,6 +484,45 @@ class DecisionAgent(Agent):
             evaluation=evaluation,
         )
         self.output_schema = DecisionAgSchema()
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
+        # auto-run (executor-style): evaluation is available right after construction
+        result = self.run(to_json=True)
+        self.decision = result.model_dump() if result else {}
+
+
+class ContradictionAgent(Agent):
+    def __init__(
+        self,
+        input: str,
+        clarification=None,
+        hypothesis=None,
+        hypothesis_id=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+        evaluation=None,
+        max_retries=1,
+        session_id=None,
+    ):
+        self.instance_id = uuid.uuid4()
+        self.name = "DecisionAgent_" + str(self.instance_id)
+        self.prompts = ContradictionAgPrompt(
+            question=input,
+            clarification=clarification,
+            hypothesis=hypothesis,
+            hypothesis_id=hypothesis_id,
+            plans=plans,
+            tasks=tasks,
+            evidence=evidence,
+            evaluation=evaluation,
+        )
+        self.output_schema = ContradictionAgSchema()
         super().__init__(
             self.name,
             input,

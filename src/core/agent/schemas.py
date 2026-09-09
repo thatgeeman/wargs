@@ -13,7 +13,7 @@ class StrictSchema(BaseModel):
 class QuestionAnalysisAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     investigation_type: str = Field(
         default="",
@@ -46,7 +46,10 @@ class HypothesisAgSchema(StrictSchema):
         ..., description="A single hypothesis that could explain the phenomenon"
     )
     confidence: float = Field(
-        ..., description="Prior confidence before verifying the statement", ge=0, le=1
+        ...,
+        description="Prior confidence before verifying the statement.",
+        ge=0,
+        le=1,
     )
     confidence_history: list[float] = Field(
         default_factory=list,
@@ -65,7 +68,7 @@ class HypothesisAgSchema(StrictSchema):
 class ManyHypothesesAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     hypotheses: list[HypothesisAgSchema] = Field(
         default_factory=list,
@@ -114,7 +117,7 @@ class ResearchPlannerAgSchema(StrictSchema):
 class ManyResearchPlannerAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     plans: list[ResearchPlannerAgSchema] = Field(
         default_factory=list,
@@ -148,13 +151,29 @@ class ResearchTaskAgSchema(StrictSchema):
 class ManyResearchTaskAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     tasks: list[ResearchTaskAgSchema] = Field(
         default_factory=list,
         min_length=1,
         description="""A list of tool-use tasks that execute the research plans. The research task is an executable decomposition of research plans.
         Each tool use needs a full task definition (ie, a single Research Plan/RP ID per research tool/task is required)""",
+    )
+
+
+class HypothesisImpactAgSchema(StrictSchema):
+    hypothesis_id: int = Field(
+        ...,
+        ge=1,
+        description="ID of the hypothesis this evidence item affects",
+    )
+    impact: Literal["supporting", "weakening", "contradictory", "neutral"] = Field(
+        default="neutral",
+        description="What this evidence item does to THIS hypothesis specifically: supporting = strengthens it; weakening = reduces confidence in it; contradictory = directly conflicts with it; neutral = no confidence change",
+    )
+    reasoning: str = Field(
+        default="",
+        description="How this evidence item affects this specific hypothesis",
     )
 
 
@@ -171,22 +190,26 @@ class SingleEvidenceEvaluationAgSchema(StrictSchema):
         default="",
         description="Why this evidence item is or is not relevant to the question and plans",
     )
+    hypothesis_impacts: list[HypothesisImpactAgSchema] = Field(
+        default_factory=list,
+        description="One entry per hypothesis this evidence item actually affects. Only hypotheses with a genuine, evidence-backed impact may be listed — hypotheses not listed here get no confidence change. Empty if the evidence changes nothing.",
+    )
     evidence_impact: Literal["supporting", "weakening", "contradictory", "neutral"] = (
         Field(
             default="neutral",
-            description="What this evidence item does to current beliefs: supporting = strengthens at least one hypothesis; weakening = reduces confidence in at least one hypothesis; contradictory = directly conflicts with a hypothesis, an alternative must be investigated; neutral = relevant but insufficient to change confidence in any hypothesis",
+            description="Aggregate of hypothesis_impacts — the strongest impact among them (contradictory > weakening > supporting > neutral). supporting = strengthens at least one hypothesis; weakening = reduces confidence in at least one hypothesis; contradictory = directly conflicts with a hypothesis, an alternative must be investigated; neutral = relevant but insufficient to change confidence in any hypothesis",
         )
     )
     impact_reasoning: str = Field(
         default="",
-        description="Which hypotheses this evidence item affects, and how",
+        description="Summary of which hypotheses this evidence item affects, and how",
     )
 
 
 class EvidenceEvaluationAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     evaluations: list[SingleEvidenceEvaluationAgSchema] = Field(
         default_factory=list,
@@ -202,7 +225,7 @@ class EvidenceEvaluationAgSchema(StrictSchema):
 class DecisionAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below.",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     decision: Literal["CHALLENGE", "REFINE_PLAN", "REASSESS", "FINISH"] = Field(
         default="FINISH",
@@ -215,4 +238,59 @@ class DecisionAgSchema(StrictSchema):
     focus_hypotheses: list[int] = Field(
         default_factory=list,
         description="IDs of the hypotheses the next step should concentrate on",
+    )
+
+
+class ContradictionAgSchema(StrictSchema):
+    hypotheses_id: str = Field(
+        default="",
+        description="Which of the hypothesis is targetted by this action (Use one hypothesis ID: 1, 2, etc)",
+    )
+    contradiction_found: bool = Field(
+        default=False, description="Whether a contradction was found."
+    )
+    contradiction_type: Literal[
+        "NOT_APPLICABLE",
+        "DIRECT_CONTRADICTION",
+        "MISSING_EXPECTED_EVIDENCE",
+        "ALTERNATIVE_EXPLANATION",
+        "SOURCE_DEPENDENCE",
+        "TEMPORAL_MISMATCH",
+        "SCOPE_MISMATCH",
+    ] = Field(
+        default="NOT_APPLICABLE",
+        description="When a contradiction was found, what type of contradiction is it?",
+    )
+    contradiction: str = Field(
+        default="",
+        description="The exact contradiction that could be used to reject the hypothesis. The strongest possible alternative explanation that would reduce confidence in the leading hypothesis.",
+    )
+    evidence_ids: list[str] = Field(
+        default_factory=list,
+        description="The reference to the specific evidence IDs that this hypothesis targets and now, contradicts.",
+    )
+    alternative_hypothesis: str = Field(
+        default="",
+        description="Alternative hypothesis that could be valid, that would strongly reject the provided hypothesis.",
+    )
+    severity: Literal[
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "NOT_APPLICABLE",
+    ] = Field(default="NOT_APPLICABLE", description="How strong is the contradiction")
+    recommended_followup: str = Field(
+        default="",
+        description="""
+        What evidence is further needed to support the contradiction or as a 
+        general followup, what action should the agent take that would further the contradiction.
+        """,
+    )
+
+
+class ManyContradictionsAgSchema(StrictSchema):
+    contradictions: list[ContradictionAgSchema] = Field(
+        default_factory=list,
+        min_length=1,
+        description="A collection of contradictions, gathered per hypothesis",
     )

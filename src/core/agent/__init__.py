@@ -1,4 +1,5 @@
 from .agent import (
+    ContradictionAgent,
     DecisionAgent,
     EvidenceEvaluator,
     HypothesisAgent,
@@ -7,8 +8,10 @@ from .agent import (
     ResearchTask,
 )
 from .schemas import (
+    ContradictionAgSchema,
     DecisionAgSchema,
     EvidenceEvaluationAgSchema,
+    ManyContradictionsAgSchema,
     ManyHypothesesAgSchema,
     ManyResearchPlannerAgSchema,
     ManyResearchTaskAgSchema,
@@ -18,11 +21,14 @@ from .schemas import (
 )
 
 __all__ = [
+    "ContradictionAgSchema",
+    "ContradictionAgent",
     "DecisionAgSchema",
     "DecisionAgent",
     "EvidenceEvaluationAgSchema",
     "EvidenceEvaluator",
     "HypothesisAgent",
+    "ManyContradictionsAgSchema",
     "ManyHypothesesAgSchema",
     "ManyResearchPlannerAgSchema",
     "ManyResearchTaskAgSchema",

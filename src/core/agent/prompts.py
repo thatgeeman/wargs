@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from ...config import Config
 from .schemas import (
+    ManyContradictionsAgSchema,
     ManyHypothesesAgSchema,
 )
 
@@ -159,7 +160,11 @@ Instructions:
 
 class ResearchPlannerAgPrompt(PromptClass):
     def __init__(
-        self, question, hypothesis: ManyHypothesesAgSchema = [], evaluation=None
+        self,
+        question,
+        hypothesis: ManyHypothesesAgSchema = [],
+        evaluation=None,
+        contradictions=None,
     ):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
@@ -167,6 +172,9 @@ class ResearchPlannerAgPrompt(PromptClass):
         self.hypothesis = self.get_formatted_hypothesis(hypothesis)
         self.evidence = self.get_formatted_evidence(hypothesis)
         self.evaluation = self.get_formatted_evaluation(evaluation)
+        self.contradictions = (
+            self.get_formatted_contradictions(contradictions) if contradictions else ""
+        )
         self.system_prompt = f"""
 You are the Research Planner Agent in an autonomous investigation system.
 Today's date is {self.date}. 
@@ -208,6 +216,13 @@ Actively look for research that could disprove or weaken it.
 If evaluation feedback from a previous evidence round is provided, propose
 research actions that address its gaps.
 
+If contradictions for previous hypotheses from a previous evidence round is provided, propose
+research actions that uses those contradictions as signal for your planning.
+
+Every plan you propose is a NEW, not-yet-executed action: always set its status
+to "ACTIVE". Never mark a plan as COMPLETED, WEAKENED, or INVALIDATED — those
+transitions are applied later by the system based on gathered evidence.
+
 Return only the requested structured output.
     """
         self.user_prompt = f"""
@@ -227,6 +242,9 @@ CURRENT EXPECTED EVIDENCE
 
 EVALUATION FEEDBACK FROM PREVIOUS EVIDENCE
 {self.evaluation}
+
+CONTRADICTIONS FROM PREVIOUS EVIDENCE
+{self.contradictions}
 """
         logger.debug(f"User Prompt for PlannerAgent:\n{self.user_prompt}")
 
@@ -268,15 +286,36 @@ EVALUATION FEEDBACK FROM PREVIOUS EVIDENCE
             return "\n".join(f"{key}: {value}" for key, value in evaluation.items())
         return str(evaluation)
 
+    def get_formatted_contradictions(self, cs: ManyContradictionsAgSchema):
+        """Takes a structured input and returns in paragraphs the contradictions"""
+        result = ""
+        if not isinstance(cs, BaseModel):
+            logger.info("Contradictions are not of correct type.")
+            return result
+        for _, c in enumerate(cs.contradictions):
+            if c.contradiction_found:
+                result += f"Hypothesis ID: {c.hypotheses_id}\nContradiction Type: {c.contradiction_type}\nContradiction: {c.contradiction}\nEvidence IDs: {c.evidence_ids}\nAlternate Hypothesis: {c.alternative_hypothesis}\nSeverity: {c.severity}\nRecommended Followup: {c.recommended_followup}\n"
+        return result
+
 
 class ResearchTaskAgPrompt(PromptClass):
-    def __init__(self, question, plans=None, tools=None, evaluation=None):
+    def __init__(
+        self,
+        question,
+        plans=None,
+        tools=None,
+        evaluation=None,
+        contradictions=None,
+    ):
         super().__init__()
         self.date = datetime.now().strftime("%Y-%m-%d")
         self.question = question
         self.context = self.get_formatted_context(plans)
         self.tools = self.get_formatted_tools(tools)
         self.evaluation = self.get_formatted_evaluation(evaluation)
+        self.contradictions = (
+            self.get_formatted_contradictions(contradictions) if contradictions else ""
+        )
         self.system_prompt = f"""
 You are the Research Task Agent in an autonomous investigation system.
 Today's date is {self.date}.
@@ -321,6 +360,9 @@ an unsuitable tool call.
 If evaluation feedback from a previous evidence round is provided, generate
 tasks that address it.
 
+If contradictions for previous hypotheses from a previous evidence round is provided, propose
+research actions that uses those contradictions as signal for your planning.
+
 Return only the requested structured output.
 """
         self.user_prompt = f"""
@@ -338,6 +380,9 @@ AVAILABLE TOOLS
 
 EVALUATION FEEDBACK FROM PREVIOUS EVIDENCE
 {self.evaluation}
+
+CONTRADICTIONS FROM PREVIOUS EVIDENCE
+{self.contradictions}
 
 Produce the research tasks needed to execute the plans above.
 """
@@ -386,6 +431,17 @@ Produce the research tasks needed to execute the plans above.
         if isinstance(evaluation, dict):
             return "\n".join(f"{key}: {value}" for key, value in evaluation.items())
         return str(evaluation)
+
+    def get_formatted_contradictions(self, cs: ManyContradictionsAgSchema):
+        """Takes a structured input and returns in paragraphs the contradictions"""
+        result = ""
+        if not isinstance(cs, BaseModel):
+            logger.info("Contradictions are not of correct type.")
+            return result
+        for _, c in enumerate(cs.contradictions):
+            if c.contradiction_found:
+                result += f"Hypothesis ID: {c.hypotheses_id}\nContradiction Type: {c.contradiction_type}\nContradiction: {c.contradiction}\nEvidence IDs: {c.evidence_ids}\nAlternate Hypothesis: {c.alternative_hypothesis}\nSeverity: {c.severity}\nRecommended Followup: {c.recommended_followup}\n"
+        return result
 
 
 class DecisionAgPrompt(PromptClass):
@@ -546,12 +602,21 @@ You DO:
   item, identified by its ID (the ID of the task that produced it)
 - judge RELEVANCE of each item: does it actually address the investigation
   question and the expectations stated in the research plans?
-- judge IMPACT of each relevant item: what does it do to current beliefs?
-  - supporting: strengthens at least one hypothesis
-  - weakening: reduces confidence in at least one hypothesis
-  - contradictory: directly conflicts with a hypothesis — an alternative
-    explanation must be investigated
-  - neutral: relevant, but insufficient to change confidence in any hypothesis
+- judge IMPACT of each relevant item PER HYPOTHESIS (hypothesis_impacts):
+  emit one entry for each hypothesis the item genuinely affects — and only
+  those. Hypotheses you do not list receive no confidence change. Per
+  hypothesis, decide:
+  - supporting: this item strengthens this hypothesis
+  - weakening: this item reduces confidence in this hypothesis
+  - contradictory: this item directly conflicts with this hypothesis — an
+    alternative explanation must be investigated
+  - neutral: listed for completeness, but changes nothing
+  The same evidence item may support one hypothesis and weaken another —
+  never let a single overall judgement bleed onto hypotheses it does not
+  actually address.
+- set the item-level evidence_impact to the STRONGEST of the per-hypothesis
+  impacts (contradictory > weakening > supporting > neutral); neutral means
+  relevant but insufficient to change confidence in any hypothesis
 - give concrete, actionable FEEDBACK for the next iteration, aggregated across
   all items: what is still missing, what should be searched next, which angles
   were not covered
@@ -597,6 +662,157 @@ evidence item — and provide aggregated feedback for the next research
 iteration.
 """
         logger.debug(f"User Prompt for EvidenceEvaluatorAgent:\n{self.user_prompt}")
+
+    def get_formatted_items(self, items):
+        """Render plans/tasks/evidence (BaseModel, dict or str) as readable text."""
+        if not items:
+            return "None provided."
+        entries = items if isinstance(items, list) else [items]
+        result = ""
+        for item in entries:
+            if isinstance(item, BaseModel):
+                item = item.model_dump()
+            if isinstance(item, dict):
+                for key, value in item.items():
+                    result += f"{key}: {value}\n"
+            else:
+                result += f"{item}\n"
+            result += "\n"
+        return result.strip()
+
+    def get_formatted_hypotheses(self, hypotheses):
+        """Render hypotheses with confidence and their supporting/weakening predictions."""
+        if not hypotheses:
+            return "No hypotheses provided."
+        entries = hypotheses if isinstance(hypotheses, list) else [hypotheses]
+        result = ""
+        for h in entries:
+            result += (
+                f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
+            )
+            for e in getattr(h, "supporting_predictions", []):
+                result += f"  Supporting prediction: {e}\n"
+            for e in getattr(h, "weakening_predictions", []):
+                result += f"  Weakening prediction: {e}\n"
+            result += "\n"
+        return result.strip()
+
+
+class ContradictionAgPrompt(PromptClass):
+    def __init__(
+        self,
+        question,
+        clarification=None,
+        hypothesis=None,
+        hypothesis_id=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+        evaluation=None,
+    ):
+        super().__init__()
+        self.date = datetime.now().strftime("%Y-%m-%d")
+        self.question = question
+        self.clarification = clarification or "No clarification provided."
+        self.hypothesis = self.get_formatted_hypotheses(hypothesis)
+        self.hypothesis_id = hypothesis_id
+        self.plans = self.get_formatted_items(plans)
+        self.tasks = self.get_formatted_items(tasks)
+        self.evidence = self.get_formatted_items(evidence)
+        self.evaluation = self.get_formatted_items(evaluation)
+        self.system_prompt = f"""
+You are the Contradiction Agent in an autonomous investigation system.
+Today's date is {self.date}.
+
+Your purpose is to actively challenge ONE hypothesis provided by the user.
+
+You are NOT trying to confirm the current conclusion.
+You are NOT trying to produce the final report.
+You are NOT trying to maximize the amount of conflicting
+evidence.
+
+You should identify the strongest plausible reason that the
+provided hypothesis may be wrong, incomplete, overstated, or
+based on insufficient evidence.
+
+Inspect:
+- the provided hypotheses/hypothesis-id and confidence
+- supporting and weakening predictions
+- collected evidence
+- evidence provenance
+- previous contradictions
+- research history
+
+Look especially for:
+
+1. Direct contradictions:
+   Evidence that conflicts with the hypothesis.
+
+2. Missing expected evidence:
+   The hypothesis predicts something important, but the
+   investigation failed to find it.
+
+3. Alternative explanations:
+   A different hypothesis explains the same evidence better.
+
+4. Temporal problems:
+   The proposed cause occurs after the supposed effect.
+
+5. Scope problems:
+   Evidence supports a broader or narrower claim than
+   the hypothesis makes.
+
+6. Source dependence:
+   Apparently independent evidence actually comes from the
+   same source or underlying claim.
+
+7. Measurement problems:
+   The evidence does not adequately measure the phenomenon
+   described by the hypothesis.
+
+Prefer strong, specific contradictions over a large number
+of weak objections.
+
+Do not invent evidence.
+
+Only reference evidence that exists in the investigation state.
+
+If no meaningful contradiction exists, explicitly state that
+no contradiction was found.
+
+Return only the structured output.
+"""
+        self.user_prompt = f"""
+INVESTIGATION QUESTION
+{self.question}
+
+
+USER CLARIFICATION
+{self.clarification}
+
+HYPOTHESIS ID TO TARGET
+{self.hypothesis_id}
+
+ALL HYPOTHESES
+{self.hypothesis}
+
+
+RESEARCH PLANS
+{self.plans}
+
+
+EXECUTED TASKS
+{self.tasks}
+
+
+GATHERED EVIDENCE
+{self.evidence}
+
+EVALUATION 
+{self.evaluation}
+
+"""
+        logger.debug(f"User Prompt for ContradictionAgent:\n{self.user_prompt}")
 
     def get_formatted_items(self, items):
         """Render plans/tasks/evidence (BaseModel, dict or str) as readable text."""

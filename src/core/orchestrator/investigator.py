@@ -8,9 +8,11 @@ from ...helpers import run_with_timeout
 from ...tools.executor import ToolExecutor
 from ...tools.store import WebSearch
 from ..agent import (
+    ContradictionAgent,
     DecisionAgent,
     EvidenceEvaluator,
     HypothesisAgent,
+    ManyContradictionsAgSchema,
     ManyHypothesesAgSchema,
     ManyResearchPlannerAgSchema,
     ManyResearchTaskAgSchema,
@@ -65,8 +67,14 @@ class InvestigationState(BaseState):
         self.events = []
         self.decision = {}
         self.next_action = None
-        self.max_iterations = 5  # harness-side cap on the decision loop
+        self.max_iterations = 10  # harness-side cap on the decision loop
         self.max_retries = 3
+        # harness-side stagnation break: consecutive evidence rounds that were
+        # all-neutral (or had no relevant evidence at all). Reaching the cap
+        # force-finishes the investigation instead of looping on REASSESS.
+        self.neutral_streak = 0
+        self.max_neutral_streak = 2
+        self.force_finish = False
 
     def analyze_question(self):
         analyzer = QuestionAnalyzerAgent(
@@ -135,11 +143,12 @@ class InvestigationState(BaseState):
                 reason=f"Error occurred while running hypothesis agent: {e}",
             )
 
-    def generate_research_plan(self, evaluation=None):
+    def generate_research_plan(self, evaluation=None, contradictions=None):
         research_planner_agent = ResearchPlanner(
             input=self.question,
             hypothesis=self.hypotheses,
             evaluation=evaluation,
+            contradictions=contradictions,
             max_retries=self.max_retries,
             session_id=self.session_id,
         )
@@ -159,7 +168,7 @@ class InvestigationState(BaseState):
                 reason=f"Error occurred while running research planner agent: {e}",
             )
 
-    def generate_research_task(self, evaluation=None):
+    def generate_research_task(self, evaluation=None, contradictions=None):
         # only open objectives get executed — closed plans (WEAKENED /
         # INVALIDATED / COMPLETED) are kept for history but not acted on
         active_plans = [
@@ -174,6 +183,7 @@ class InvestigationState(BaseState):
             input=self.question,
             plans=active_plans,
             tools=self.tools,
+            contradictions=contradictions,
             max_retries=self.max_retries,
             evaluation=evaluation,
             session_id=self.session_id,
@@ -246,11 +256,13 @@ class InvestigationState(BaseState):
         New objectives are created by generate_research_plan, not by mutating
         existing plans.
 
-        Confidence is updated per hypothesis from each relevant evidence item:
-        direction comes from the item's impact, magnitude is weighted by the
-        priority of the plan that produced the evidence. Every update is
-        recorded in the hypothesis' confidence_history and in self.events
-        with the evaluator's impact_reasoning.
+        Confidence is updated per hypothesis from each relevant evidence item's
+        hypothesis_impacts: direction comes from the per-hypothesis impact the
+        evaluator assigned, magnitude is weighted by the priority of the plan
+        that produced the evidence. Hypotheses the evaluator did not list are
+        left untouched — an item-level impact never bleeds onto hypotheses it
+        does not address. Every update is recorded in the hypothesis'
+        confidence_history and in self.events with the evaluator's reasoning.
         """
         evaluations = self.evidence_evaluation.get("evaluations", [])
         # map each evidence item back to the plan its task executed
@@ -274,17 +286,23 @@ class InvestigationState(BaseState):
                 transitions.append(f"{plan.id} -> {new_status}")
 
         # --- per-hypothesis confidence updates ---
+        # driven by the evaluator's per-hypothesis impacts: only hypotheses
+        # explicitly listed with a non-neutral impact are updated
         updates = []
+        hypothesis_by_id = {h.id: h for h in self.hypotheses}
         for e in evaluations:
-            impact = e.get("evidence_impact", "neutral")
-            if not e.get("evidence_relevant") or impact == "neutral":
+            if not e.get("evidence_relevant"):
                 continue
             plan = plan_by_id.get(task_to_plan.get(e.get("evidence_id")))
             if plan is None:
                 continue
             weight = plan.priority  # higher-priority evidence moves confidence more
-            for h in self.hypotheses:
-                if str(h.id) not in plan.hypotheses_targeted:
+            for hi in e.get("hypothesis_impacts", []):
+                impact = hi.get("impact", "neutral")
+                if impact == "neutral":
+                    continue
+                h = hypothesis_by_id.get(hi.get("hypothesis_id"))
+                if h is None:
                     continue
                 old = h.confidence
                 if impact == "supporting":
@@ -293,7 +311,7 @@ class InvestigationState(BaseState):
                     new = old - weight * old
                 else:  # contradictory
                     new = old - 2 * weight * old
-                h.confidence = round(min(1.0, max(0.0, new)), 3)
+                h.confidence = round(min(1.0, max(0.0, new)), 6)
                 h.confidence_history.append(h.confidence)
                 updates.append(f"H{h.id}: {old} -> {h.confidence}")
                 self.events.append(
@@ -304,7 +322,7 @@ class InvestigationState(BaseState):
                         "impact": impact,
                         "old_confidence": old,
                         "new_confidence": h.confidence,
-                        "reasoning": e.get("impact_reasoning", ""),
+                        "reasoning": hi.get("reasoning", ""),
                     }
                 )
 
@@ -318,7 +336,9 @@ class InvestigationState(BaseState):
 
     def _assign_plan_ids(self, plans):
         """Assign deterministic plan IDs (RP-001, RP-002, ...) continuing after
-        the existing ones — IDs proposed by the LLM are ignored."""
+        the existing ones — IDs proposed by the LLM are ignored. Status is also
+        harness-owned: newly proposed plans always start as ACTIVE regardless of
+        what the LLM emitted; only evidence may transition them."""
         next_n = 1 + max(
             (
                 int(p.id.split("-")[1])
@@ -329,6 +349,7 @@ class InvestigationState(BaseState):
         )
         for plan in plans:
             plan.id = f"RP-{next_n:03d}"
+            plan.status = "ACTIVE"
             next_n += 1
         return plans
 
@@ -354,29 +375,46 @@ class InvestigationState(BaseState):
             raise AttributeError
         evaluations = self.evidence_evaluation.get("evaluations", [])
         relevant = [e for e in evaluations if e.get("evidence_relevant")]
-        # relevance != impact: first check whether any evidence matters at all
-        if not relevant:
-            # no relevant evidence -> execution-level failure: new tasks with feedback
-            return self.generate_research_task(evaluation=self.evidence_evaluation)
         # aggregate per-evidence impact over relevant items, strongest signal wins:
         # contradictory > weakening > supporting > neutral
         impacts = {e.get("evidence_impact", "neutral") for e in relevant}
-        self.evidence_impact = next(
-            (i for i in ("contradictory", "weakening", "supporting") if i in impacts),
-            "neutral",
+        self.evidence_impact = (
+            next(
+                (
+                    i
+                    for i in ("contradictory", "weakening", "supporting")
+                    if i in impacts
+                ),
+                "neutral",
+            )
+            if relevant
+            else "neutral"
         )
-        if self.evidence_impact == "supporting":
-            return self.update_hypothesis()
-        if self.evidence_impact == "weakening":
+        # stagnation tracking: rounds with no relevant evidence or only neutral
+        # impact count toward the force-finish cap; any real signal resets it
+        if self.evidence_impact == "neutral":
+            self.neutral_streak += 1
+            logger.info(
+                f"Neutral evidence round {self.neutral_streak}/{self.max_neutral_streak}."
+            )
+            if self.neutral_streak >= self.max_neutral_streak:
+                self.force_finish = True
+                self.events.append(
+                    {
+                        "event": "force_finish",
+                        "reason": f"{self.neutral_streak} consecutive neutral evidence rounds.",
+                    }
+                )
+                self.log(
+                    "FORCE_FINISH",
+                    reason=f"{self.neutral_streak} consecutive neutral evidence rounds — further research shows diminishing returns.",
+                )
+        else:
+            self.neutral_streak = 0
+            # real signal -> apply plan transitions and confidence updates;
+            # what happens next (new tasks, new plans, finish) is decided by
+            # the decision agent, never inline here
             self.update_hypothesis()
-            # feed the weakness into the next research round
-            return self.generate_research_task(evaluation=self.evidence_evaluation)
-        if self.evidence_impact == "contradictory":
-            self.update_hypothesis()
-            # investigate the alternative: objective changed -> new plan
-            return self.generate_research_plan(evaluation=self.evidence_evaluation)
-        # neutral / insufficient -> more evidence needed, same objective
-        return self.generate_research_task(evaluation=self.evidence_evaluation)
 
     def decision_agent(self):
         da = DecisionAgent(
@@ -394,17 +432,45 @@ class InvestigationState(BaseState):
         self.decision = da.decision
         self.next_action = self.decision.get("decision")
 
+    def generate_contradictions(self, feedback):
+        # contradictions are newly generated on every generate as it depends on the hypothesis and plan
+        self.contradictions: ManyContradictionsAgSchema = []
+        for h_id in feedback.focus_hypotheses:
+            # also contract only those that were explicitly asked for, and challenged one at a time
+            c = ContradictionAgent(
+                input=self.question,
+                clarification=self.clarification,
+                hypothesis=self.hypotheses,
+                hypothesis_id=h_id,
+                plans=self.research_plans,
+                tasks=self.research_tasks,
+                evidence=self.evidence,
+                evaluation=self.evidence_evaluation,
+                max_retries=self.max_retries,
+                session_id=self.session_id,
+            )
+            self.contradictions.append(c)
+            logger.info(f"Contradiction for {h_id} prepared: {c}")
+
     def execute_decision(self):
         logger.info(f"DecisionAgent to execute: {self.decision}")
         feedback = self.decision  # carries feedback + focus_hypotheses
         if self.next_action == "REFINE_PLAN":
-            self.generate_research_plan(evaluation=feedback)
-            self.generate_research_task(evaluation=feedback)
+            self.generate_research_plan(
+                evaluation=feedback,
+                contradictions=self.contradictions,
+            )
+            self.generate_research_task(
+                evaluation=feedback,
+                contradictions=self.contradictions,
+            )
         elif self.next_action == "REASSESS":
-            self.generate_research_task(evaluation=feedback)
+            self.generate_research_task(
+                evaluation=feedback,
+                contradictions=self.contradictions,
+            )
         elif self.next_action == "CHALLENGE":
-            logger.info("CHALLENGE: ContradictionAgent not built yet — skipping.")
-            return
+            self.generate_contradictions(feedback=feedback)
         else:
             logger.warning(f"Unknown or missing action: {self.next_action}")
             return
@@ -413,6 +479,12 @@ class InvestigationState(BaseState):
 
     def agent_loop(self):
         for iteration in range(1, self.max_iterations + 1):
+            if self.force_finish:
+                self.set_state(
+                    "AGENT_DONE",
+                    reason=f"Forced finish: {self.neutral_streak} consecutive neutral evidence rounds.",
+                )
+                break
             self.decision_agent()
             if self.next_action is None:
                 self.set_state("ERROR", reason="Decision agent returned no decision.")

@@ -12,12 +12,12 @@ from ..agent import (
     DecisionAgent,
     EvidenceEvaluator,
     HypothesisAgent,
-    ManyContradictionsAgSchema,
     ManyHypothesesAgSchema,
     ManyResearchPlannerAgSchema,
     ManyResearchTaskAgSchema,
     QuestionAnalysisAgSchema,
     QuestionAnalyzerAgent,
+    ReportAgent,
     ResearchPlanner,
     ResearchTask,
     ResearchTaskAgSchema,
@@ -75,6 +75,8 @@ class InvestigationState(BaseState):
         self.neutral_streak = 0
         self.max_neutral_streak = 2
         self.force_finish = False
+        self.report = None
+        self.report_path = None
 
     def analyze_question(self):
         analyzer = QuestionAnalyzerAgent(
@@ -434,8 +436,12 @@ class InvestigationState(BaseState):
 
     def generate_contradictions(self, feedback):
         # contradictions are newly generated on every generate as it depends on the hypothesis and plan
-        self.contradictions: ManyContradictionsAgSchema = []
-        for h_id in feedback.focus_hypotheses:
+        # note: this is a list of ContradictionAgent objects — each result
+        # dict (ContradictionAgSchema model_dump) lives on the agent's
+        # .decision attribute
+        self.contradictions = []
+        # feedback is the DecisionAgent's decision dict (model_dump), not an object
+        for h_id in feedback.get("focus_hypotheses", []):
             # also contract only those that were explicitly asked for, and challenged one at a time
             c = ContradictionAgent(
                 input=self.question,
@@ -471,11 +477,181 @@ class InvestigationState(BaseState):
             )
         elif self.next_action == "CHALLENGE":
             self.generate_contradictions(feedback=feedback)
+            found = [
+                c
+                for c in self.contradictions
+                if getattr(c, "decision", {}).get("contradiction_found")
+            ]
+            if not found:
+                # no counterevidence to chase — skip straight to the next
+                # decision instead of re-executing the previous round's tasks
+                self.set_state(
+                    "CHALLENGE_NO_CONTRADICTION",
+                    reason="Contradiction agent found no contradiction; no contradiction-driven research needed.",
+                )
+                return
+            # contradictions are signal: turn their recommended follow-ups
+            # into new plans and tasks so this round gathers NEW evidence
+            # instead of re-executing the previous round's tasks
+            self.generate_research_plan(
+                evaluation=feedback,
+                contradictions=self.contradictions,
+            )
+            self.generate_research_task(
+                evaluation=feedback,
+                contradictions=self.contradictions,
+            )
         else:
             logger.warning(f"Unknown or missing action: {self.next_action}")
             return
         self.execute_research_task()
         self.evaluate_evidence()
+
+    def generate_report(self):
+        """Run the Report Agent on the final state and write the report.
+
+        The agent only proposes the report sections (with inline evidence-ID
+        citations); the harness owns the final markdown document: section
+        order, per-hypothesis final confidences, and the References appendix
+        that maps every citable evidence ID to the sources its tool call
+        returned. The LLM never sees or invents URLs."""
+        if not self.hypotheses:
+            self.set_state(
+                "REPORT_SKIPPED", reason="No hypotheses available for report."
+            )
+            return
+        report_agent = ReportAgent(
+            input=self.question,
+            clarification=self.clarification,
+            hypothesis=self.hypotheses,
+            plans=self.research_plans,
+            tasks=self.research_tasks,
+            evidence=self.evidence,
+            evaluation=self.evidence_evaluation,
+            contradictions=self.contradictions,
+            max_retries=self.max_retries,
+            session_id=self.session_id,
+        )
+        try:
+            report = report_agent.run(True)
+            if report is None:
+                self.set_state("ERROR", reason="Report agent returned no result.")
+                return
+            self.report = report
+            self.report_path = self._write_report(report)
+            self.set_state(
+                "REPORT_GENERATED", reason=f"Report written to {self.report_path}"
+            )
+        except Exception as e:
+            self.set_state(
+                "ERROR",
+                reason=f"Error occurred while running report agent: {e}",
+            )
+
+    def _write_report(self, report):
+        from datetime import datetime
+
+        hypothesis_by_id = {h.id: h for h in self.hypotheses}
+        discussed = set()
+
+        lines = [
+            f"# {report.title}",
+            "",
+            f"**Question:** {self.question}  ",
+            f"**Date:** {datetime.now().strftime('%Y-%m-%d')}  ",
+            f"**Session:** {self.session_id}",
+            "",
+            "## Abstract",
+            "",
+            report.abstract,
+            "",
+            "## 1. Introduction",
+            "",
+            report.introduction,
+            "",
+            "## 2. Hypotheses",
+            "",
+        ]
+
+        # hypothesis discussions — including rejected ones — with the
+        # harness-owned final confidence shown next to the agent's verdict
+        for entry in report.hypotheses:
+            h = hypothesis_by_id.get(entry.hypothesis_id)
+            if h is None:
+                logger.warning(
+                    f"Report discusses unknown hypothesis id {entry.hypothesis_id} — skipping."
+                )
+                continue
+            discussed.add(entry.hypothesis_id)
+            lines += [
+                f"### H{h.id} — {h.hypothesis}",
+                "",
+                f"*Final confidence: {h.confidence} — verdict: {entry.verdict}*",
+                "",
+                entry.discussion,
+                "",
+            ]
+        # safety net: hypotheses the agent failed to discuss are still listed
+        for h in self.hypotheses:
+            if h.id not in discussed:
+                lines += [
+                    f"### H{h.id} — {h.hypothesis}",
+                    "",
+                    f"*Final confidence: {h.confidence} — verdict: not discussed by report agent*",
+                    "",
+                ]
+
+        if report.alternate_hypotheses:
+            lines += ["### Alternative hypotheses", ""]
+            for alt in report.alternate_hypotheses:
+                lines += [
+                    f"**Alternative to H{alt.replaces_hypothesis_id}:** {alt.statement}",
+                    "",
+                    alt.discussion,
+                    "",
+                ]
+
+        lines += [
+            "## 3. Evidence",
+            "",
+            report.evidence,
+            "",
+            "## 4. Conclusion",
+            "",
+            report.conclusion,
+            "",
+            "## References",
+            "",
+            self._render_references(),
+            "",
+        ]
+
+        report_dir = cfg.config_dir / f"trace_{self.session_id}"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        path = report_dir / "report.md"
+        path.write_text("\n".join(lines))
+        return path
+
+    def _render_references(self):
+        """Map every citable evidence ID to the sources its tool call returned."""
+        if not self.evidence:
+            return "No evidence was gathered during this investigation."
+        lines = []
+        for e in self.evidence:
+            params = e.get("parameters") or {}
+            query = params.get("query") if isinstance(params, dict) else None
+            header = f"- **[{e.get('id')}]** — `{e.get('tool')}`"
+            if query:
+                header += f' (query: "{query}")'
+            lines.append(header)
+            result = e.get("result") or {}
+            if not isinstance(result, dict):
+                continue
+            for wr in result.get("web_results", []):
+                title = wr.get("title") or "untitled"
+                url = wr.get("url") or ""
+                lines.append(f"  - [{title}]({url})" if url else f"  - {title}")
+        return "\n".join(lines)
 
     def agent_loop(self):
         for iteration in range(1, self.max_iterations + 1):
@@ -501,6 +677,7 @@ class InvestigationState(BaseState):
                 reason=f"Max decision iterations reached ({self.max_iterations}).",
             )
         logger.info("Prepare report now.")
+        self.generate_report()
 
     def run_order(self):
         if self.state == "INIT" or self.current_step <= self.max_steps:
@@ -574,6 +751,7 @@ if __name__ == "__main__":
         Hypothesis:\n{state.hypotheses}\n\n
         Plans:\n{state.research_plans}\n\n
         Tasks:\n{state.research_tasks}\n\n
-        Evidence:\n{state.evidence}
+        Evidence:\n{state.evidence}\n\n
+        Report:\n{state.report_path}
         """
     )

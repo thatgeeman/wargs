@@ -294,3 +294,71 @@ class ManyContradictionsAgSchema(StrictSchema):
         min_length=1,
         description="A collection of contradictions, gathered per hypothesis",
     )
+
+
+class ReportHypothesisAgSchema(StrictSchema):
+    hypothesis_id: int = Field(
+        ...,
+        ge=1,
+        description="ID of the investigated hypothesis this entry discusses",
+    )
+    verdict: Literal["supported", "weakened", "rejected", "inconclusive"] = Field(
+        ...,
+        description="Final verdict for this hypothesis based on its final confidence and the evidence: supported = evidence strengthened it; weakened = evidence reduced confidence but did not kill it; rejected = contradicted/invalidated by evidence; inconclusive = evidence insufficient to decide",
+    )
+    discussion: str = Field(
+        ...,
+        description="Markdown discussion of this hypothesis and its verdict. Cite the evidence that backs the verdict inline using the evidence IDs, e.g. [RT-001].",
+    )
+
+
+class ReportAlternateHypothesisAgSchema(StrictSchema):
+    statement: str = Field(
+        ...,
+        description="Statement of the alternative hypothesis that emerged during the investigation (typically from the contradiction step)",
+    )
+    replaces_hypothesis_id: int = Field(
+        ...,
+        ge=1,
+        description="ID of the original hypothesis this alternative challenges or replaces",
+    )
+    discussion: str = Field(
+        ...,
+        description="Markdown discussion of why this alternative is plausible. Cite evidence inline using the evidence IDs, e.g. [RT-001].",
+    )
+
+
+class ReportAgSchema(StrictSchema):
+    reasoning: str = Field(
+        default="",
+        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+    )
+    title: str = Field(
+        default="",
+        description="Short thesis-style title for the investigation report",
+    )
+    abstract: str = Field(
+        default="",
+        description="Abstract of the report: the question, the approach, the main finding and the remaining uncertainty. At most ~150 words.",
+    )
+    introduction: str = Field(
+        default="",
+        description="Markdown introduction: context of the question, why it matters, and what the investigation set out to test — grounded in the gathered evidence. Cite evidence inline using the evidence IDs, e.g. [RT-001].",
+    )
+    hypotheses: list[ReportHypothesisAgSchema] = Field(
+        default_factory=list,
+        min_length=1,
+        description="One discussion entry per investigated hypothesis, covering ALL of them — including the ones that were rejected",
+    )
+    alternate_hypotheses: list[ReportAlternateHypothesisAgSchema] = Field(
+        default_factory=list,
+        description="Alternative hypotheses that emerged from the contradiction step. Empty if none were raised.",
+    )
+    evidence: str = Field(
+        default="",
+        description="Markdown evidence section: what was actually found, organized by theme or hypothesis — not a raw dump. Every factual claim must carry an inline citation to an evidence ID, e.g. [RT-001].",
+    )
+    conclusion: str = Field(
+        default="",
+        description="Short markdown conclusion: the surviving explanation, the confidence in it, and what remains unresolved. At most ~100 words.",
+    )

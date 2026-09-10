@@ -14,6 +14,7 @@ from .prompts import (
     EvidenceEvaluatorAgPrompt,
     HypothesisAgPrompt,
     QuestionAnalyzerAgPrompt,
+    ReportAgPrompt,
     ResearchPlannerAgPrompt,
     ResearchTaskAgPrompt,
     RetrySchemaAgPrompt,
@@ -26,6 +27,7 @@ from .schemas import (
     ManyResearchPlannerAgSchema,
     ManyResearchTaskAgSchema,
     QuestionAnalysisAgSchema,
+    ReportAgSchema,
 )
 
 cfg = Config()
@@ -150,19 +152,27 @@ class Agent(ABC):
     def save_trace(self):
         import os
 
-        save_mode = "w"  # write mode by default
-        os.makedirs(os.path.dirname(self.trace_file), exist_ok=True)
-        if os.path.exists(self.trace_file):
-            save_mode = "a"  # Append if trace file exists
-            logger.warning(f"Trace file path is non existent for agent {self.name}.")
         if len(self.traces) == 0:
             logger.warning(f"No trace data to save for agent {self.name}.")
             return
-        logger.debug(
-            f"Saving trace for {self.name} to {self.trace_file} with mode '{save_mode}'"
-        )
-        with open(self.trace_file, save_mode) as f:
-            json.dump(self.traces, f, indent=4)
+        os.makedirs(os.path.dirname(self.trace_file), exist_ok=True)
+        traces = self.traces
+        if os.path.exists(self.trace_file):
+            # read-modify-write: appending raw JSON would concatenate
+            # documents ([...][...]) and produce an invalid file
+            try:
+                with open(self.trace_file) as f:
+                    existing = json.load(f)
+                traces = (
+                    existing if isinstance(existing, list) else [existing]
+                ) + traces
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(
+                    f"Could not read existing trace file {self.trace_file} ({e}) — overwriting with current traces."
+                )
+        logger.debug(f"Saving trace for {self.name} to {self.trace_file}")
+        with open(self.trace_file, "w") as f:
+            json.dump(traces, f, indent=4)
             logger.info(f"Trace for {self.name} saved to {self.trace_file}")
 
     def done(self):
@@ -533,6 +543,47 @@ class ContradictionAgent(Agent):
         # auto-run (executor-style): evaluation is available right after construction
         result = self.run(to_json=True)
         self.decision = result.model_dump() if result else {}
+
+
+class ReportAgent(Agent):
+    """Synthesizes the finished investigation into a thesis-style markdown
+    report. Run by the harness after the decision loop ends; the harness owns
+    rendering and the citation reference list — the agent only writes the
+    sections and cites evidence IDs inline."""
+
+    def __init__(
+        self,
+        input: str,
+        clarification=None,
+        hypothesis=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+        evaluation=None,
+        contradictions=None,
+        max_retries=1,
+        session_id=None,
+    ):
+        self.instance_id = uuid.uuid4()
+        self.name = "ReportAgent_" + str(self.instance_id)
+        self.prompts = ReportAgPrompt(
+            question=input,
+            clarification=clarification,
+            hypothesis=hypothesis,
+            plans=plans,
+            tasks=tasks,
+            evidence=evidence,
+            evaluation=evaluation,
+            contradictions=contradictions,
+        )
+        self.output_schema = ReportAgSchema()
+        super().__init__(
+            self.name,
+            input,
+            self.output_schema,
+            max_retries=max_retries,
+            session_id=session_id,
+        )
 
 
 if __name__ == "__main__":

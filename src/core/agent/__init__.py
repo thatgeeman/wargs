@@ -4,6 +4,7 @@ from .agent import (
     EvidenceEvaluator,
     HypothesisAgent,
     QuestionAnalyzerAgent,
+    ReportAgent,
     ResearchPlanner,
     ResearchTask,
 )
@@ -16,6 +17,7 @@ from .schemas import (
     ManyResearchPlannerAgSchema,
     ManyResearchTaskAgSchema,
     QuestionAnalysisAgSchema,
+    ReportAgSchema,
     ResearchTaskAgSchema,
     SingleEvidenceEvaluationAgSchema,
 )
@@ -34,6 +36,8 @@ __all__ = [
     "ManyResearchTaskAgSchema",
     "QuestionAnalysisAgSchema",
     "QuestionAnalyzerAgent",
+    "ReportAgent",
+    "ReportAgSchema",
     "ResearchPlanner",
     "ResearchTask",
     "ResearchTaskAgSchema",

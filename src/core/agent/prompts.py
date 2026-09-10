@@ -286,16 +286,38 @@ CONTRADICTIONS FROM PREVIOUS EVIDENCE
             return "\n".join(f"{key}: {value}" for key, value in evaluation.items())
         return str(evaluation)
 
-    def get_formatted_contradictions(self, cs: ManyContradictionsAgSchema):
-        """Takes a structured input and returns in paragraphs the contradictions"""
+    def get_formatted_contradictions(self, cs):
+        """Render contradictions as readable text. Accepts a
+        ManyContradictionsAgSchema or the investigator's list of
+        ContradictionAgent objects (each result dict lives on the agent's
+        .decision attribute)."""
+        if not cs:
+            return "No contradictions from previous rounds."
+        entries = (
+            cs.contradictions
+            if isinstance(cs, ManyContradictionsAgSchema)
+            else (cs if isinstance(cs, list) else [cs])
+        )
         result = ""
-        if not isinstance(cs, BaseModel):
-            logger.info("Contradictions are not of correct type.")
-            return result
-        for _, c in enumerate(cs.contradictions):
-            if c.contradiction_found:
-                result += f"Hypothesis ID: {c.hypotheses_id}\nContradiction Type: {c.contradiction_type}\nContradiction: {c.contradiction}\nEvidence IDs: {c.evidence_ids}\nAlternate Hypothesis: {c.alternative_hypothesis}\nSeverity: {c.severity}\nRecommended Followup: {c.recommended_followup}\n"
-        return result
+        for c in entries:
+            data = getattr(c, "decision", c)
+            if isinstance(data, BaseModel):
+                data = data.model_dump()
+            if not isinstance(data, dict):
+                result += f"{data}\n\n"
+                continue
+            if not data.get("contradiction_found"):
+                continue
+            result += (
+                f"Hypothesis ID: {data.get('hypotheses_id')}\n"
+                f"Contradiction Type: {data.get('contradiction_type')}\n"
+                f"Contradiction: {data.get('contradiction')}\n"
+                f"Evidence IDs: {data.get('evidence_ids')}\n"
+                f"Alternate Hypothesis: {data.get('alternative_hypothesis')}\n"
+                f"Severity: {data.get('severity')}\n"
+                f"Recommended Followup: {data.get('recommended_followup')}\n\n"
+            )
+        return result.strip() or "No contradictions from previous rounds."
 
 
 class ResearchTaskAgPrompt(PromptClass):
@@ -432,16 +454,38 @@ Produce the research tasks needed to execute the plans above.
             return "\n".join(f"{key}: {value}" for key, value in evaluation.items())
         return str(evaluation)
 
-    def get_formatted_contradictions(self, cs: ManyContradictionsAgSchema):
-        """Takes a structured input and returns in paragraphs the contradictions"""
+    def get_formatted_contradictions(self, cs):
+        """Render contradictions as readable text. Accepts a
+        ManyContradictionsAgSchema or the investigator's list of
+        ContradictionAgent objects (each result dict lives on the agent's
+        .decision attribute)."""
+        if not cs:
+            return "No contradictions from previous rounds."
+        entries = (
+            cs.contradictions
+            if isinstance(cs, ManyContradictionsAgSchema)
+            else (cs if isinstance(cs, list) else [cs])
+        )
         result = ""
-        if not isinstance(cs, BaseModel):
-            logger.info("Contradictions are not of correct type.")
-            return result
-        for _, c in enumerate(cs.contradictions):
-            if c.contradiction_found:
-                result += f"Hypothesis ID: {c.hypotheses_id}\nContradiction Type: {c.contradiction_type}\nContradiction: {c.contradiction}\nEvidence IDs: {c.evidence_ids}\nAlternate Hypothesis: {c.alternative_hypothesis}\nSeverity: {c.severity}\nRecommended Followup: {c.recommended_followup}\n"
-        return result
+        for c in entries:
+            data = getattr(c, "decision", c)
+            if isinstance(data, BaseModel):
+                data = data.model_dump()
+            if not isinstance(data, dict):
+                result += f"{data}\n\n"
+                continue
+            if not data.get("contradiction_found"):
+                continue
+            result += (
+                f"Hypothesis ID: {data.get('hypotheses_id')}\n"
+                f"Contradiction Type: {data.get('contradiction_type')}\n"
+                f"Contradiction: {data.get('contradiction')}\n"
+                f"Evidence IDs: {data.get('evidence_ids')}\n"
+                f"Alternate Hypothesis: {data.get('alternative_hypothesis')}\n"
+                f"Severity: {data.get('severity')}\n"
+                f"Recommended Followup: {data.get('recommended_followup')}\n\n"
+            )
+        return result.strip() or "No contradictions from previous rounds."
 
 
 class DecisionAgPrompt(PromptClass):
@@ -690,6 +734,183 @@ iteration.
             result += (
                 f"ID: {h.id}\nHypothesis: {h.hypothesis}\nConfidence: {h.confidence}\n"
             )
+            for e in getattr(h, "supporting_predictions", []):
+                result += f"  Supporting prediction: {e}\n"
+            for e in getattr(h, "weakening_predictions", []):
+                result += f"  Weakening prediction: {e}\n"
+            result += "\n"
+        return result.strip()
+
+
+class ReportAgPrompt(PromptClass):
+    def __init__(
+        self,
+        question,
+        clarification=None,
+        hypothesis=None,
+        plans=None,
+        tasks=None,
+        evidence=None,
+        evaluation=None,
+        contradictions=None,
+    ):
+        super().__init__()
+        self.date = datetime.now().strftime("%Y-%m-%d")
+        self.question = question
+        self.clarification = clarification or "No clarification provided."
+        self.hypothesis = self.get_formatted_hypotheses(hypothesis)
+        self.plans = self.get_formatted_items(plans)
+        self.tasks = self.get_formatted_items(tasks)
+        self.evidence = self.get_formatted_items(evidence)
+        self.evaluation = self.get_formatted_items(evaluation)
+        self.contradictions = self.get_formatted_contradictions(contradictions)
+        self.citable_ids = self.get_citable_ids(evidence)
+        self.system_prompt = f"""
+You are the Report Agent in an autonomous investigation system.
+Today's date is {self.date}.
+
+The investigation has FINISHED. Your responsibility is to synthesize its final
+state into a thesis-style markdown report for a human reader. You are the last
+step of the pipeline: hypotheses have been generated, research executed,
+evidence evaluated, confidences updated and contradictions sought.
+
+You DO:
+- write the report sections defined by the output schema: title, abstract,
+  introduction, one discussion entry per hypothesis (including the REJECTED
+  ones), alternative hypotheses raised by the contradiction step, an evidence
+  section, and a short conclusion
+- ground every factual claim in the gathered evidence and cite it inline using
+  the evidence IDs (e.g. [RT-001]). Only cite IDs from the CITABLE EVIDENCE IDS
+  list — a separate step renders the reference list, so never invent sources,
+  URLs, or citation markers
+- refer to hypotheses as H<id> (e.g. H1, H2)
+- assign each hypothesis a verdict consistent with its final confidence and the
+  evidence impacts: high final confidence with supporting evidence ->
+  supported; contradicted or collapsed confidence -> rejected; reduced but
+  surviving confidence -> weakened; insufficient evidence either way ->
+  inconclusive
+- scale the report's length to the complexity of the topic and the amount of
+  evidence: a narrow question with few evidence items deserves a few hundred
+  words; a multi-hypothesis investigation with many evidence items deserves
+  more. Never pad. As a guide: abstract <= 150 words, conclusion <= 100 words,
+  everything else only as long as the evidence supports.
+
+You do NOT:
+- gather new evidence or invent evidence that was not gathered
+- change hypothesis confidences or introduce new hypotheses outside the
+  alternate_hypotheses section
+- write a literature-review-length document — this is a focused thesis, not a
+  100-page paper
+- dump raw tool output — interpret and synthesize it
+
+Return only the requested structured output.
+"""
+        self.user_prompt = f"""
+INVESTIGATION QUESTION
+{self.question}
+
+
+USER CLARIFICATION
+{self.clarification}
+
+
+HYPOTHESES (with final confidence)
+{self.hypothesis}
+
+
+RESEARCH PLANS
+{self.plans}
+
+
+EXECUTED TASKS
+{self.tasks}
+
+
+GATHERED EVIDENCE
+{self.evidence}
+
+
+EVALUATION
+{self.evaluation}
+
+
+CONTRADICTIONS
+{self.contradictions}
+
+
+CITABLE EVIDENCE IDS
+{self.citable_ids}
+
+
+Write the final investigation report.
+"""
+        logger.debug(f"User Prompt for ReportAgent:\n{self.user_prompt}")
+
+    def get_citable_ids(self, evidence):
+        """List the evidence IDs the agent is allowed to cite inline."""
+        if not evidence:
+            return "No evidence was gathered — no citations are possible."
+        entries = evidence if isinstance(evidence, list) else [evidence]
+        ids = []
+        for item in entries:
+            if isinstance(item, BaseModel):
+                item = item.model_dump()
+            if isinstance(item, dict) and item.get("id"):
+                ids.append(str(item["id"]))
+        return "\n".join(f"- [{i}]" for i in ids) if ids else "None."
+
+    def get_formatted_contradictions(self, contradictions):
+        """Render contradictions — the source of rejected and alternate hypotheses."""
+        if not contradictions:
+            return "No contradictions were raised."
+        result = ""
+        entries = (
+            contradictions if isinstance(contradictions, list) else [contradictions]
+        )
+        for c in entries:
+            # investigator stores ContradictionAgent instances; their result
+            # dict lives on .decision
+            data = getattr(c, "decision", c)
+            if isinstance(data, BaseModel):
+                data = data.model_dump()
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    result += f"{key}: {value}\n"
+            else:
+                result += f"{data}\n"
+            result += "\n"
+        return result.strip() or "No contradictions were raised."
+
+    def get_formatted_items(self, items):
+        """Render plans/tasks/evidence/evaluation (BaseModel, dict or str) as readable text."""
+        if not items:
+            return "None provided."
+        entries = items if isinstance(items, list) else [items]
+        result = ""
+        for item in entries:
+            if isinstance(item, BaseModel):
+                item = item.model_dump()
+            if isinstance(item, dict):
+                for key, value in item.items():
+                    result += f"{key}: {value}\n"
+            else:
+                result += f"{item}\n"
+            result += "\n"
+        return result.strip()
+
+    def get_formatted_hypotheses(self, hypotheses):
+        """Render hypotheses with final confidence, its history and predictions."""
+        if not hypotheses:
+            return "No hypotheses provided."
+        entries = hypotheses if isinstance(hypotheses, list) else [hypotheses]
+        result = ""
+        for h in entries:
+            result += (
+                f"ID: {h.id}\nHypothesis: {h.hypothesis}\nFinal confidence: {h.confidence}\n"
+            )
+            history = getattr(h, "confidence_history", [])
+            if history:
+                result += f"Confidence history: {history}\n"
             for e in getattr(h, "supporting_predictions", []):
                 result += f"  Supporting prediction: {e}\n"
             for e in getattr(h, "weakening_predictions", []):

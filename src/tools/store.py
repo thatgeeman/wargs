@@ -59,19 +59,27 @@ class Tool:
         import json
         import os
 
-        save_mode = "w"  # write mode by default
-        os.makedirs(os.path.dirname(self.trace_file), exist_ok=True)
-        if os.path.exists(self.trace_file):
-            save_mode = "a"  # Append if trace file exists
-            logger.warning(f"Trace file path is non existent for agent {self.name}.")
         if len(self.traces) == 0:
             logger.warning(f"No trace data to save for agent {self.name}.")
             return
-        logger.debug(
-            f"Saving trace for {self.name} to {self.trace_file} with mode '{save_mode}'"
-        )
-        with open(self.trace_file, save_mode) as f:
-            json.dump(self.traces, f, indent=4)
+        os.makedirs(os.path.dirname(self.trace_file), exist_ok=True)
+        traces = self.traces
+        if os.path.exists(self.trace_file):
+            # read-modify-write: appending raw JSON would concatenate
+            # documents ([...][...]) and produce an invalid file
+            try:
+                with open(self.trace_file) as f:
+                    existing = json.load(f)
+                traces = (
+                    existing if isinstance(existing, list) else [existing]
+                ) + traces
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(
+                    f"Could not read existing trace file {self.trace_file} ({e}) — overwriting with current traces."
+                )
+        logger.debug(f"Saving trace for {self.name} to {self.trace_file}")
+        with open(self.trace_file, "w") as f:
+            json.dump(traces, f, indent=4)
 
 
 class WebSearch(Tool):

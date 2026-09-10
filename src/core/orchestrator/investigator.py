@@ -738,7 +738,8 @@ if __name__ == "__main__":
     # input_text = "Why is Infineon doing worse than NVIDIA?"
     # input_text = "Google is the greatest company on earth"
     session_id = time.time()
-    input_text = "Morning are great for productive technical work. For junor developers to complete the coding tasks on their list."
+    # input_text = "Morning are great for productive technical work. For junor developers to complete the coding tasks on their list."
+    input_text = "Why is gaza and israel in conflict?"
     state = InvestigationState(
         question=input_text,
         session_id=session_id,

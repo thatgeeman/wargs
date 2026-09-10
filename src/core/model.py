@@ -27,7 +27,6 @@ class ModelConfig:
 class Model(ModelConfig):
     def __init__(
         self,
-        # model_name: str = "google/gemma-3-27b-it",
         model_name: str = "google/gemma-4-31B-it",
         system_prompt: str = "",
         temperature: float = 0,
@@ -103,5 +102,9 @@ class Model(ModelConfig):
 if __name__ == "__main__":
     model = Model()
     prompt = "Write a short poem about the beauty of nature."
-    response = model.call(prompt)
+    response, extra_response = model.call(prompt)
+    # print(response)
+    token_usage = response.usage.model_dump_json()
+    print(token_usage)
     print(response.choices[0].message.content)
+    print(extra_response)

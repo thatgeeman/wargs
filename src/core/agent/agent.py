@@ -193,9 +193,7 @@ class Agent(ABC):
             if getattr(self, "_max_tokens_override", None):
                 # set by a previous truncated attempt (finish_reason='length')
                 model_kwargs["max_tokens"] = self._max_tokens_override
-            self.model = Model(
-                system_prompt=self.prompts.system_prompt, **model_kwargs
-            )
+            self.model = Model(system_prompt=self.prompts.system_prompt, **model_kwargs)
             response, extra_response = self.model.call(
                 self.prompts.user_prompt, output_schema=self.get_json_schema()
             )
@@ -203,8 +201,11 @@ class Agent(ABC):
                 return response, extra_response
             # check choices
             choice = response.choices[0]
+            choice_token = {}
             # Store the choice as a dictionary in the trace for later analysis
-            self.store_trace(choice.model_dump())
+            choice_token["choice"] = choice.model_dump()
+            choice_token["token"] = response.usage.model_dump()
+            self.store_trace(choice_token)
             self.state_transition("GENERATION")
             if choice.finish_reason == "length":
                 # Truncated by max_tokens — content is missing, so the schema

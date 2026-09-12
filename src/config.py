@@ -15,6 +15,9 @@ class Config:
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     log_handler = logging.StreamHandler()
+    model = "google/gemma-4-31B-it"
+    max_tokens = 4096
+    temperature = 0
 
     def get_logger(self, name):
         logger = logging.getLogger(name)

@@ -1,4 +1,10 @@
+import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from datetime import date, datetime
+from pathlib import Path
+
+from pydantic import BaseModel
 
 from .config import Config
 
@@ -40,3 +46,20 @@ def _get_and_pop(key, d: dict, default=None):
     val = d.get(key, default)
     d.pop(key, default)
     return val, d
+
+
+class WahrgusEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, BaseModel):
+            return obj.model_dump(mode="json")
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if isinstance(obj, (uuid.UUID, Path)):
+            return str(obj)
+        # objects that know how to serialize themselves (e.g. Tool)
+        to_dict = getattr(obj, "to_dict", None)
+        if callable(to_dict):
+            return to_dict()
+        # last-resort for plain objects (Config, API clients, ...):
+        # serialize their repr instead of raising TypeError
+        return repr(obj)

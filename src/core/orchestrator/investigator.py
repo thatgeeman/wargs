@@ -1,10 +1,12 @@
+import json
+import os
 import time
 import uuid
 from abc import ABC
 from collections import OrderedDict
 
 from ...config import Config
-from ...helpers import run_with_timeout
+from ...helpers import WahrgusEncoder, run_with_timeout
 from ...tools.executor import ToolExecutor
 from ...tools.store import WebSearch
 from ..agent import (
@@ -36,6 +38,10 @@ class BaseState(ABC):
         self.max_steps = budget  # Default max steps, can be adjusted as needed
         self.timeout_perstep_s = 300
         self.tools = None
+        self.config = Config()
+        self.trace_file = (
+            self.config.config_dir / f"trace_{self.session_id}" / f"{self.name}.json"
+        )
         logger.info(f"{self.name}: Initialized")
 
     def log(self, state, reason=""):
@@ -47,6 +53,31 @@ class BaseState(ABC):
 
     def get_name(self, f):
         return f.__name__
+
+    def to_json(self):
+        data = self.__dict__
+        return json.dumps(data, cls=WahrgusEncoder, indent=4)
+
+    @classmethod
+    def from_json(cls, json_str: str):
+        data = json.loads(json_str)
+        return cls(**data)
+
+    @classmethod
+    def from_path(cls, path: str):
+        with open(path, "r") as f:
+            json_str = f.read()
+        return cls.from_json(json_str)
+
+    def dump_trace(self):
+        path = self.trace_file
+        traces = self.to_json()  # already a JSON string
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # overwrite state
+        with open(path, "w") as f:
+            f.write(traces)
+        logger.info(f"Trace for {self.name} saved to {self.trace_file}")
+        return True
 
 
 class InvestigationState(BaseState):
@@ -434,6 +465,7 @@ class InvestigationState(BaseState):
         # DecisionAgent auto-runs on construction; .decision is already a dict
         self.decision = da.decision
         self.next_action = self.decision.get("decision")
+        self.dump_trace()
 
     def generate_contradictions(self, feedback):
         # contradictions are newly generated on every generate as it depends on the hypothesis and plan
@@ -713,6 +745,8 @@ class InvestigationState(BaseState):
                     )
                 self.current_step += 1
 
+            # save traces
+            self.dump_trace()
             # handoff to the agentic loop — no retries: a timed-out loop must
             # not be re-run from scratch
             try:
@@ -724,7 +758,8 @@ class InvestigationState(BaseState):
                 )
             except TimeoutError:
                 logger.error("Agent loop timed out.")
-
+            # save traces
+            self.dump_trace()
         else:
             logger.info(
                 f"STOPPING: {self.state}, steps: {self.current_step}/{self.max_steps}"

@@ -27,10 +27,11 @@ class ModelConfig:
 class Model(ModelConfig):
     def __init__(
         self,
-        model_name: str = "google/gemma-4-31B-it",
+        model_name: str = cfg.model,
         system_prompt: str = "",
-        temperature: float = 0,
-        max_tokens: int = 4096,
+        temperature: float = cfg.temperature,
+        # will be adjusted automatically if finish reason is length
+        max_tokens: int = cfg.max_tokens,
         reasoning_effort: str = None,
     ):
         super().__init__()

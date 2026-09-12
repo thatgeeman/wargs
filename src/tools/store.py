@@ -1,5 +1,5 @@
 import uuid
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from inspect import signature
 
 from tavily import TavilyClient
@@ -13,7 +13,7 @@ logger = cfg.get_logger("ToolLogger")
 REGISTERED_TOOLS = {}  # stable tool name -> tool class
 
 
-class Tool:
+class Tool(ABC):
     tool_name = None  # stable registry name, set by subclasses
 
     def __init__(self, name, session_id=None):
@@ -34,7 +34,7 @@ class Tool:
             REGISTERED_TOOLS[cls.tool_name] = cls
 
     @abstractmethod
-    def run(self, input):
+    def run(self, **kwargs):
         raise NotImplementedError("Subclasses should implement this method.")
 
     @abstractmethod
@@ -46,6 +46,17 @@ class Tool:
             f"Transitioning {self.name} from state '{self.state}' to '{new_state}'"
         )
         self.state = new_state
+
+    def to_dict(self):
+        """JSON-safe snapshot for state dumps. Never includes secrets or clients."""
+        return {
+            "tool_name": self.tool_name,
+            "name": self.name,
+            "state": self.state,
+            "session_id": str(self.session_id),
+            "trace_file": str(self.trace_file),
+            "traces": self.traces,
+        }
 
     def store_trace(self, trace_data: dict):
         if not isinstance(trace_data, dict):

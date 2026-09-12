@@ -7,6 +7,7 @@ from abc import ABC
 from pydantic import BaseModel
 
 from ...config import Config
+from ...helpers import unwrap_json_strings
 from ..model import Model
 from .prompts import (
     ContradictionAgPrompt,
@@ -202,8 +203,11 @@ class Agent(ABC):
             # check choices
             choice = response.choices[0]
             choice_token = {}
-            # Store the choice as a dictionary in the trace for later analysis
-            choice_token["choice"] = choice.model_dump()
+            # Store the choice as a dictionary in the trace for later analysis.
+            # unwrap_json_strings turns message.content (a JSON string for
+            # structured outputs) into a real nested object instead of an
+            # escaped string in the saved file.
+            choice_token["choice"] = unwrap_json_strings(choice.model_dump())
             choice_token["token"] = response.usage.model_dump()
             self.store_trace(choice_token)
             self.state_transition("GENERATION")

@@ -48,6 +48,29 @@ def _get_and_pop(key, d: dict, default=None):
     return val, d
 
 
+def unwrap_json_strings(node):
+    """Recursively replace strings that hold a full JSON document
+    (object/array) with the parsed value.
+
+    LLM structured-output responses arrive as a JSON *string*; storing them
+    raw would double-encode the payload inside trace files.
+    """
+    if isinstance(node, dict):
+        return {k: unwrap_json_strings(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [unwrap_json_strings(v) for v in node]
+    if isinstance(node, str):
+        stripped = node.strip()
+        if stripped[:1] in "[{":
+            try:
+                # recurse: the parsed value may itself contain JSON strings
+                # (models sometimes nest JSON-in-JSON)
+                return unwrap_json_strings(json.loads(stripped))
+            except json.JSONDecodeError:
+                pass  # plain text that merely starts with [ or {
+    return node
+
+
 class WahrgusEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, BaseModel):

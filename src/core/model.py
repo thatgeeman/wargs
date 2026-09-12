@@ -50,6 +50,7 @@ class Model(ModelConfig):
         )
 
     def call(self, prompt: str, output_schema: dict = None):
+        wait_time = 10  # s time to wait if no rettry after provided
         if output_schema:
             logger.debug(
                 f"Calling model '{self.model_name}' with output schema: {output_schema}"
@@ -82,9 +83,29 @@ class Model(ModelConfig):
         except APIStatusError as e:
             if e.status_code == 429:
                 # retryable — respect Retry-After if the server sends it
-                retry_after = e.response.headers.get("retry-after")
+                retry_after = e.response.headers.get("retry-after", 1)
                 logger.warning(f"Rate limited, retry-after: {retry_after}")
-                extra_response["retry_after"] = retry_after
+                # From HF docs https://huggingface.co/docs/hub/rate-limits#rate-limit-tiers
+                # When a 429 error occurs, their SDK automatically parses the RateLimit
+                # header to extract the exact number of seconds until the rate limit
+                # resets, then waits precisely that duration before retrying.
+                # This applies to file downloads (i.e. Resolvers) and paginated Hub
+                # API calls (list models, datasets, spaces, etc.).
+                rate_limit_info = response.headers.get("RateLimit", "")
+                # "api";r=[remaining];t=[seconds remaining until reset]
+                # Parse the t=[seconds] parameter
+                for part in rate_limit_info.split(";"):
+                    if part.strip().startswith("t="):
+                        try:
+                            wait_time = int(part.split("=")[1])
+                        except Exception as e:
+                            logger.error(
+                                f"Wait time cannot be parsed from {part} in {rate_limit_info}"
+                            )
+                        break
+
+                logger.warning(f"Rate limited! Waiting for {wait_time} seconds...")
+                extra_response["retry_after"] = max(retry_after, wait_time)
             elif 400 <= e.status_code < 500:
                 # permanent — retrying will never help, fail fast
                 logger.error(f"Permanent client error {e.status_code}: {e.message}")
@@ -92,9 +113,13 @@ class Model(ModelConfig):
             else:
                 # 5xx — transient, retryable
                 logger.warning(f"Server error {e.status_code}")
+                extra_response["retry_after"] = wait_time
                 extra_response["status_code"] = e.status_code
+                logger.error(
+                    f"Model call exception: {e}. Setting `extra_response` args for retry: {extra_response}"
+                )
         except Exception as e:
-            logger.error(f"Model call exception: {e}")
+            logger.error(f"Model call exception: {e}. ")
             raise
         return response, extra_response
 

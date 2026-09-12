@@ -28,12 +28,12 @@ logger = cfg.get_logger("InvestigatorLogger")
 
 
 class BaseState(ABC):
-    def __init__(self, name, session_id=None):
+    def __init__(self, name, session_id=None, budget=10):
         self.session_id = session_id if session_id else uuid.uuid4()
         self.name = f"{name}_{self.session_id}"  # modify name to unique name for state
         self.state = "INIT"  # last state is AGENT_DONE
         self.current_step = 1
-        self.max_steps = 10  # Default max steps, can be adjusted as needed
+        self.max_steps = budget  # Default max steps, can be adjusted as needed
         self.timeout_perstep_s = 300
         self.tools = None
         logger.info(f"{self.name}: Initialized")
@@ -50,8 +50,10 @@ class BaseState(ABC):
 
 
 class InvestigationState(BaseState):
-    def __init__(self, question, session_id=None):
-        super().__init__(name="Investigation Agent", session_id=session_id)
+    def __init__(self, question, session_id=None, budget=10):
+        super().__init__(
+            name="Investigation Agent", session_id=session_id, budget=budget
+        )
 
         self.question = question
         self.question_analysis = None
@@ -67,7 +69,6 @@ class InvestigationState(BaseState):
         self.events = []
         self.decision = {}
         self.next_action = None
-        self.max_iterations = 10  # harness-side cap on the decision loop
         self.max_retries = 3
         # harness-side stagnation break: consecutive evidence rounds that were
         # all-neutral (or had no relevant evidence at all). Reaching the cap
@@ -653,8 +654,9 @@ class InvestigationState(BaseState):
                 lines.append(f"  - [{title}]({url})" if url else f"  - {title}")
         return "\n".join(lines)
 
-    def agent_loop(self):
-        for iteration in range(1, self.max_iterations + 1):
+    def agent_loop(self, max_steps=None):
+        max_steps = max_steps or self.max_steps  # replenish budget for agent loop
+        for iteration in range(1, max_steps + 1):
             if self.force_finish:
                 self.set_state(
                     "AGENT_DONE",
@@ -674,7 +676,7 @@ class InvestigationState(BaseState):
         else:
             self.set_state(
                 "AGENT_DONE",
-                reason=f"Max decision iterations reached ({self.max_iterations}).",
+                reason=f"Max decision iterations reached ({max_steps}).",
             )
         logger.info("Prepare report now.")
         self.generate_report()
@@ -718,6 +720,7 @@ class InvestigationState(BaseState):
                     self.agent_loop,
                     self.timeout_perstep_s * 10,
                     max_retries=1,
+                    max_steps=self.max_steps,  # the number of steps is replenished for agent loop
                 )
             except TimeoutError:
                 logger.error("Agent loop timed out.")
@@ -739,10 +742,14 @@ if __name__ == "__main__":
     # input_text = "Google is the greatest company on earth"
     session_id = time.time()
     # input_text = "Morning are great for productive technical work. For junor developers to complete the coding tasks on their list."
-    input_text = "Why is gaza and israel in conflict?"
+    # input_text = "Why is gaza and israel in conflict?"
+    input_text = (
+        "If an LLM/AI model solves a big math problem, who gets the credit for it?"
+    )
     state = InvestigationState(
         question=input_text,
         session_id=session_id,
+        budget=10,
     )
     state.run_order()
     print("\n\n---------------------------------------------------------------")

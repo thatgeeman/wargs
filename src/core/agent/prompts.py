@@ -657,10 +657,8 @@ You DO:
   - neutral: listed for completeness, but changes nothing
   The same evidence item may support one hypothesis and weaken another —
   never let a single overall judgement bleed onto hypotheses it does not
-  actually address.
-- set the item-level evidence_impact to the STRONGEST of the per-hypothesis
-  impacts (contradictory > weakening > supporting > neutral); neutral means
-  relevant but insufficient to change confidence in any hypothesis
+  actually address. Aggregation across hypotheses is done downstream — you
+  only judge per-hypothesis impacts.
 - give concrete, actionable FEEDBACK for the next iteration, aggregated across
   all items: what is still missing, what should be searched next, which angles
   were not covered

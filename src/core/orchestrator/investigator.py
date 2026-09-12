@@ -42,6 +42,8 @@ class BaseState(ABC):
         self.trace_file = (
             self.config.config_dir / f"trace_{self.session_id}" / f"{self.name}.json"
         )
+        # mirror all log output into this run's session dir (run.log)
+        Config.init_session_logging(self.session_id)
         logger.info(f"{self.name}: Initialized")
 
     def log(self, state, reason=""):
@@ -281,12 +283,31 @@ class InvestigationState(BaseState):
         self.evidence = evidence  # since this is a evidence gathering process
         logger.info(f"Evidence gathered. Count: {len(self.evidence)}")
 
+    @staticmethod
+    def _targeted_impacts(evaluation, plan):
+        """Impact labels of an evidence item, restricted to the hypotheses
+        the plan targets. Falls back to all of the item's impacts when the
+        plan lists no usable targets."""
+        targets = set()
+        for t in plan.hypotheses_targeted:
+            try:
+                targets.add(int(t))
+            except (TypeError, ValueError):
+                continue
+        return [
+            hi.get("impact", "neutral")
+            for hi in evaluation.get("hypothesis_impacts", [])
+            if not targets or hi.get("hypothesis_id") in targets
+        ]
+
     def update_hypothesis(self):
         """Apply evidence-driven updates to plans and hypothesis confidence.
 
         Plans are immutable: evidence never rewrites a plan's objective, it
-        only transitions its status. Strongest impact wins per plan:
-        contradictory -> INVALIDATED, weakening -> WEAKENED, supporting -> COMPLETED.
+        only transitions its status. Strongest targeted impact wins per plan:
+        contradictory -> INVALIDATED, weakening -> WEAKENED, supporting ->
+        COMPLETED — computed only over the hypotheses the plan targets, so
+        evidence hitting a non-targeted hypothesis never transitions the plan.
         New objectives are created by generate_research_plan, not by mutating
         existing plans.
 
@@ -304,6 +325,8 @@ class InvestigationState(BaseState):
         plan_by_id = {p.id: p for p in self.research_plans}
 
         # --- plan lifecycle transitions ---
+        # per-item impact is computed against the plan's targeted hypotheses
+        # only (see _targeted_impacts); strongest targeted impact wins
         transitions = []
         for impact, new_status in (
             ("contradictory", "INVALIDATED"),
@@ -311,10 +334,12 @@ class InvestigationState(BaseState):
             ("supporting", "COMPLETED"),
         ):
             for e in evaluations:
-                if not e.get("evidence_relevant") or e.get("evidence_impact") != impact:
+                if not e.get("evidence_relevant"):
                     continue
                 plan = plan_by_id.get(task_to_plan.get(e.get("evidence_id")))
                 if plan is None or plan.status != "ACTIVE":
+                    continue
+                if impact not in self._targeted_impacts(e, plan):
                     continue
                 plan.status = new_status
                 transitions.append(f"{plan.id} -> {new_status}")
@@ -409,24 +434,26 @@ class InvestigationState(BaseState):
             raise AttributeError
         evaluations = self.evidence_evaluation.get("evaluations", [])
         relevant = [e for e in evaluations if e.get("evidence_relevant")]
-        # aggregate per-evidence impact over relevant items, strongest signal wins:
-        # contradictory > weakening > supporting > neutral
-        impacts = {e.get("evidence_impact", "neutral") for e in relevant}
-        self.evidence_impact = (
-            next(
-                (
-                    i
-                    for i in ("contradictory", "weakening", "supporting")
-                    if i in impacts
-                ),
-                "neutral",
+        # round-level aggregate: histogram over the per-hypothesis impacts of
+        # all relevant items. Mixed-direction rounds (supports H1 while
+        # weakening H2) stay visible instead of collapsing to a single label.
+        self.evidence_impact = {
+            label: sum(
+                1
+                for e in relevant
+                for hi in e.get("hypothesis_impacts", [])
+                if hi.get("impact", "neutral") == label
             )
-            if relevant
-            else "neutral"
+            for label in ("supporting", "weakening", "contradictory", "neutral")
+        }
+        logger.info(f"Evidence impact this round: {self.evidence_impact}")
+        has_signal = any(
+            self.evidence_impact[label]
+            for label in ("supporting", "weakening", "contradictory")
         )
         # stagnation tracking: rounds with no relevant evidence or only neutral
         # impact count toward the force-finish cap; any real signal resets it
-        if self.evidence_impact == "neutral":
+        if not has_signal:
             self.neutral_streak += 1
             logger.info(
                 f"Neutral evidence round {self.neutral_streak}/{self.max_neutral_streak}."

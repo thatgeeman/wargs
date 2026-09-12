@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 
 from dotenv import load_dotenv
 from openai import APIStatusError, APITimeoutError, OpenAI
@@ -25,6 +27,11 @@ class ModelConfig:
 
 
 class Model(ModelConfig):
+    # pacing state is class-level: _trigger_run creates a fresh Model per
+    # attempt, so per-instance timestamps would never throttle anything
+    _last_call_at = 0.0
+    _rate_lock = threading.Lock()
+
     def __init__(
         self,
         model_name: str = cfg.model,
@@ -41,7 +48,7 @@ class Model(ModelConfig):
         self.system_prompt = system_prompt
         self.reasoning_effort = reasoning_effort
         # Retries are handled at the agent level, so disable the SDK's internal
-        # retry loop — otherwise each "attempt" is silently 3x the configured timeout.
+        # retry loop: otherwise each "attempt" is silently 3x the configured timeout.
         self.timeout_s = 300
         self.client = OpenAI(
             api_key=self.api_key,
@@ -50,8 +57,26 @@ class Model(ModelConfig):
             timeout=self.timeout_s,
         )
 
+    def _throttle(self):
+        """Enforce the configured requests-per-minute quota: sleep only the
+        remaining fraction of the minimum inter-request interval, so sparse
+        calls never wait. Disabled when requests_per_minute <= 0.
+
+        Note: HF has approx 1000 per 5 minute window for non-pro users for inference
+        endpoints. Defaults of the config.py module are based on that number.
+        """
+        if cfg.requests_per_minute <= 0:
+            return
+        interval = 60.0 / cfg.requests_per_minute
+        with Model._rate_lock:
+            wait = Model._last_call_at + interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            Model._last_call_at = time.monotonic()
+
     def call(self, prompt: str, output_schema: dict = None):
         wait_time = 10  # s time to wait if no rettry after provided
+        self._throttle()  # to not pile on the provider
         if output_schema:
             logger.debug(
                 f"Calling model '{self.model_name}' with output schema: {output_schema}"
@@ -83,30 +108,33 @@ class Model(ModelConfig):
             raise
         except APIStatusError as e:
             if e.status_code == 429:
-                # retryable — respect Retry-After if the server sends it
-                retry_after = e.response.headers.get("retry-after", 1)
-                logger.warning(f"Rate limited, retry-after: {retry_after}")
-                # From HF docs https://huggingface.co/docs/hub/rate-limits#rate-limit-tiers
-                # When a 429 error occurs, their SDK automatically parses the RateLimit
-                # header to extract the exact number of seconds until the rate limit
-                # resets, then waits precisely that duration before retrying.
-                # This applies to file downloads (i.e. Resolvers) and paginated Hub
-                # API calls (list models, datasets, spaces, etc.).
-                rate_limit_info = response.headers.get("RateLimit", "")
-                # "api";r=[remaining];t=[seconds remaining until reset]
-                # Parse the t=[seconds] parameter
+                # retryable, collect every wait hint the server sent and use
+                # the largest; `wait_time` is the fallback only when the
+                # server sent nothing usable
+                delays = []
+                # standard Retry-After header (headers are strings)
+                raw_retry = e.response.headers.get("retry-after")
+                if raw_retry is not None:
+                    try:
+                        delays.append(float(raw_retry))
+                    except (TypeError, ValueError):
+                        logger.error(f"Unparseable retry-after header: {raw_retry}")
+                # HF RateLimit header, per
+                # https://huggingface.co/docs/hub/rate-limits#rate-limit-tiers
+                # format: "api";r=[remaining];t=[seconds until reset]
+                rate_limit_info = e.response.headers.get("RateLimit", "")
                 for part in rate_limit_info.split(";"):
                     if part.strip().startswith("t="):
                         try:
-                            wait_time = int(part.split("=")[1])
-                        except Exception as e:
+                            delays.append(int(part.split("=")[1]))
+                        except (ValueError, IndexError):
                             logger.error(
                                 f"Wait time cannot be parsed from {part} in {rate_limit_info}"
                             )
                         break
-
-                logger.warning(f"Rate limited! Waiting for {wait_time} seconds...")
-                extra_response["retry_after"] = max(retry_after, wait_time)
+                delay = max(delays) if delays else wait_time
+                logger.warning(f"Rate limited! Waiting for {delay} seconds...")
+                extra_response["retry_after"] = delay
             elif 400 <= e.status_code < 500:
                 # permanent — retrying will never help, fail fast
                 logger.error(f"Permanent client error {e.status_code}: {e.message}")

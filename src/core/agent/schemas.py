@@ -95,9 +95,9 @@ class ResearchPlannerAgSchema(StrictSchema):
         description="What exactly should we investigate and the objective of this plan.",
     )
     rationale: str = Field(..., description="Rationale for chosing this action")
-    hypotheses_targeted: list[str] = Field(
+    hypotheses_targeted: list[int] = Field(
         default_factory=list,
-        description="Which of the hypotheses are targetted by this action (Use hypothesis IDs: [1, 2])",
+        description="IDs of the hypotheses this plan targets (integer hypothesis IDs, e.g. [1, 2])",
     )
     supporting_result: str = Field(
         ...,
@@ -193,12 +193,6 @@ class SingleEvidenceEvaluationAgSchema(StrictSchema):
     hypothesis_impacts: list[HypothesisImpactAgSchema] = Field(
         default_factory=list,
         description="One entry per hypothesis this evidence item actually affects. Only hypotheses with a genuine, evidence-backed impact may be listed — hypotheses not listed here get no confidence change. Empty if the evidence changes nothing.",
-    )
-    evidence_impact: Literal["supporting", "weakening", "contradictory", "neutral"] = (
-        Field(
-            default="neutral",
-            description="Aggregate of hypothesis_impacts — the strongest impact among them (contradictory > weakening > supporting > neutral). supporting = strengthens at least one hypothesis; weakening = reduces confidence in at least one hypothesis; contradictory = directly conflicts with a hypothesis, an alternative must be investigated; neutral = relevant but insufficient to change confidence in any hypothesis",
-        )
     )
     impact_reasoning: str = Field(
         default="",

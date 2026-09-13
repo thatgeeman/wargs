@@ -19,7 +19,7 @@ def run_with_timeout(func, timeout, *args, **kwargs):
     Raises TimeoutError if every attempt exceeds the timeout.
 
     Note: Python cannot kill a running thread, so a timed-out worker keeps
-    running in the background — but the caller is released immediately.
+    running in the background, but the caller is released immediately.
     """
     func_name = func.__name__
     max_retries, kwargs = _get_and_pop("max_retries", kwargs, 1)

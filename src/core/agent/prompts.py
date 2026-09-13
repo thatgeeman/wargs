@@ -80,7 +80,7 @@ You do NOT:
 - answer the question
 - generate hypotheses
 - do any research
-- silently assume missing details — your job is precisely to surface them
+- silently assume missing details; your job is precisely to surface them
 
 You DO:
 - classify the investigation type (e.g. comparative evaluation, causal
@@ -106,7 +106,7 @@ Follow-up question rules:
 - only formulate one when the status is NEEDS_CLARIFICATION; leave it empty
   otherwise
 - ask ONE concise, natural-language question that resolves the most critical
-  gaps — combine related gaps instead of interrogating the user with a list
+  gaps, combining related gaps instead of interrogating the user with a list
   of separate questions
 - phrase it so the user can answer in one or two sentences)
 
@@ -220,7 +220,7 @@ If contradictions for previous hypotheses from a previous evidence round is prov
 research actions that uses those contradictions as signal for your planning.
 
 Every plan you propose is a NEW, not-yet-executed action: always set its status
-to "ACTIVE". Never mark a plan as COMPLETED, WEAKENED, or INVALIDATED — those
+to "ACTIVE". Never mark a plan as COMPLETED, WEAKENED, or INVALIDATED; those
 transitions are applied later by the system based on gathered evidence.
 
 Return only the requested structured output.
@@ -279,7 +279,7 @@ CONTRADICTIONS FROM PREVIOUS EVIDENCE
     def get_formatted_evaluation(self, evaluation):
         """Render feedback from a previous evidence evaluation, if any."""
         if not evaluation:
-            return "No prior evaluation — this is the first research round."
+            return "No prior evaluation; this is the first research round."
         if isinstance(evaluation, BaseModel):
             evaluation = evaluation.model_dump()
         if isinstance(evaluation, dict):
@@ -344,7 +344,7 @@ Today's date is {self.date}.
 
 The research objective has already been planned. Your responsibility is to plan the
 tool use: turn the objective into concrete, executable research tasks with exact
-tool calls. You do not run them — a separate executor will execute the calls you
+tool calls. You do not run them; a separate executor will execute the calls you
 specify.
 
 You do NOT:
@@ -353,7 +353,7 @@ You do NOT:
 - interpret results or decide what evidence means
 - judge, rank, or update hypotheses
 - invent tools that are not listed as available
-- execute anything — a separate executor runs the calls you specify
+- execute anything; a separate executor runs the calls you specify
 
 You DO:
 - emit one task per tool call; split broad objectives into multiple tasks
@@ -366,7 +366,7 @@ You DO:
 - prefer primary or high-quality sources (filings, official statistics, reputable
   news)
 - design queries that could realistically surface the supporting OR weakening
-  results described in the plan — the goal is evidence that discriminates between
+  results described in the plan, since the goal is evidence that discriminates between
   hypotheses, not evidence that merely confirms the leading one
 
 Parameters:
@@ -374,7 +374,7 @@ Parameters:
   (e.g. query, topic, max_results)
 - emit parameters as a JSON-encoded object string, e.g.
   "{{\"query\": \"nvidia q2 revenue\", \"max_results\": 5}}"
-- do not add any other top-level keys to the task — only the fields in the schema
+- do not add any other top-level keys to the task, only the fields in the schema
 
 If a plan cannot be executed with the available tools, skip it rather than forcing
 an unsuitable tool call.
@@ -447,7 +447,7 @@ Produce the research tasks needed to execute the plans above.
     def get_formatted_evaluation(self, evaluation):
         """Render feedback from a previous evidence evaluation, if any."""
         if not evaluation:
-            return "No prior evaluation — this is the first research round."
+            return "No prior evaluation; this is the first research round."
         if isinstance(evaluation, BaseModel):
             evaluation = evaluation.model_dump()
         if isinstance(evaluation, dict):
@@ -516,7 +516,7 @@ The investigation has gathered evidence by executing research tasks. A separate
 evaluator has judged each evidence item's relevance and impact, and the harness
 has already updated hypothesis confidences and plan statuses accordingly. Your
 job is to decide what happens NEXT. You do not gather evidence, evaluate it, or
-update hypotheses — the step you spawn does that based on your decision.
+update hypotheses; the step you spawn does that based on your decision.
 
 You DO:
 - decide the next step of the investigation based on the gathered evidence,
@@ -527,7 +527,7 @@ You DO:
     not been stress-tested yet.
   - REFINE_PLAN: spawn the Research Planner to create new research plans.
     Choose when evidence contradicted current beliefs or no ACTIVE plans
-    remain. Existing plans are immutable and kept for history — new plans
+    remain. Existing plans are immutable and kept for history; new plans
     are appended, old objectives are never rewritten.
   - REASSESS: spawn the Research Task Agent to define new tasks for the
     existing, still-ACTIVE plans. Choose when the objective is unchanged but
@@ -539,7 +539,7 @@ You DO:
 - give concrete, actionable FEEDBACK for the agent you spawn: what to target,
   why this decision was made, which angles were not covered
 - select the hypotheses (focus_hypotheses) the next step should concentrate
-  on — select only, never update them
+  on; select only, never update them
 
 You do NOT:
 - answer the investigation question
@@ -638,7 +638,7 @@ Today's date is {self.date}.
 
 The investigation has gathered evidence by executing research tasks. Your
 responsibility is to judge the quality and usefulness of that evidence. You do
-not gather new evidence and you do not update hypotheses — separate steps do
+not gather new evidence and you do not update hypotheses; separate steps do
 that based on your evaluation.
 
 You DO:
@@ -647,17 +647,17 @@ You DO:
 - judge RELEVANCE of each item: does it actually address the investigation
   question and the expectations stated in the research plans?
 - judge IMPACT of each relevant item PER HYPOTHESIS (hypothesis_impacts):
-  emit one entry for each hypothesis the item genuinely affects — and only
+  emit one entry for each hypothesis the item genuinely affects, and only
   those. Hypotheses you do not list receive no confidence change. Per
   hypothesis, decide:
   - supporting: this item strengthens this hypothesis
   - weakening: this item reduces confidence in this hypothesis
-  - contradictory: this item directly conflicts with this hypothesis — an
+  - contradictory: this item directly conflicts with this hypothesis, so an
     alternative explanation must be investigated
   - neutral: listed for completeness, but changes nothing
-  The same evidence item may support one hypothesis and weaken another —
+  The same evidence item may support one hypothesis and weaken another, so
   never let a single overall judgement bleed onto hypotheses it does not
-  actually address. Aggregation across hypotheses is done downstream — you
+  actually address. Aggregation across hypotheses is done downstream; you
   only judge per-hypothesis impacts.
 - give concrete, actionable FEEDBACK for the next iteration, aggregated across
   all items: what is still missing, what should be searched next, which angles
@@ -699,8 +699,8 @@ GATHERED EVIDENCE
 {self.evidence}
 
 
-Evaluate each piece of gathered evidence independently — one evaluation per
-evidence item — and provide aggregated feedback for the next research
+Evaluate each piece of gathered evidence independently, one evaluation per
+evidence item, and provide aggregated feedback for the next research
 iteration.
 """
         logger.debug(f"User Prompt for EvidenceEvaluatorAgent:\n{self.user_prompt}")
@@ -779,7 +779,7 @@ You DO:
   section, and a short conclusion
 - ground every factual claim in the gathered evidence and cite it inline using
   the evidence IDs (e.g. [RT-001]). Only cite IDs from the CITABLE EVIDENCE IDS
-  list — a separate step renders the reference list, so never invent sources,
+  list, since a separate step renders the reference list; never invent sources,
   URLs, or citation markers
 - refer to hypotheses as H<id> (e.g. H1, H2)
 - assign each hypothesis a verdict consistent with its final confidence and the
@@ -797,9 +797,9 @@ You do NOT:
 - gather new evidence or invent evidence that was not gathered
 - change hypothesis confidences or introduce new hypotheses outside the
   alternate_hypotheses section
-- write a literature-review-length document — this is a focused thesis, not a
+- write a literature-review-length document; this is a focused thesis, not a
   100-page paper
-- dump raw tool output — interpret and synthesize it
+- dump raw tool output; interpret and synthesize it
 
 Return only the requested structured output.
 """
@@ -847,7 +847,7 @@ Write the final investigation report.
     def get_citable_ids(self, evidence):
         """List the evidence IDs the agent is allowed to cite inline."""
         if not evidence:
-            return "No evidence was gathered — no citations are possible."
+            return "No evidence was gathered, so no citations are possible."
         entries = evidence if isinstance(evidence, list) else [evidence]
         ids = []
         for item in entries:
@@ -858,7 +858,7 @@ Write the final investigation report.
         return "\n".join(f"- [{i}]" for i in ids) if ids else "None."
 
     def get_formatted_contradictions(self, contradictions):
-        """Render contradictions — the source of rejected and alternate hypotheses."""
+        """Render contradictions, the source of rejected and alternate hypotheses."""
         if not contradictions:
             return "No contradictions were raised."
         result = ""

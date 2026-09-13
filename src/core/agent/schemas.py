@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, Json
 
 class StrictSchema(BaseModel):
     # extra="forbid" makes pydantic emit "additionalProperties": false in the
-    # JSON schema — required by strict structured-output endpoints — and also
+    # JSON schema, required by strict structured-output endpoints, and also
     # rejects unexpected keys when validating model output.
     model_config = ConfigDict(extra="forbid")
 
@@ -13,7 +13,7 @@ class StrictSchema(BaseModel):
 class QuestionAnalysisAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+        description="Scratchpad: think step by step here FIRST, analyze the input, weigh options, before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     investigation_type: str = Field(
         default="",
@@ -68,7 +68,7 @@ class HypothesisAgSchema(StrictSchema):
 class ManyHypothesesAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+        description="Scratchpad: think step by step here FIRST, analyze the input, weigh options, before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     hypotheses: list[HypothesisAgSchema] = Field(
         default_factory=list,
@@ -117,7 +117,7 @@ class ResearchPlannerAgSchema(StrictSchema):
 class ManyResearchPlannerAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+        description="Scratchpad: think step by step here FIRST, analyze the input, weigh options, before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     plans: list[ResearchPlannerAgSchema] = Field(
         default_factory=list,
@@ -151,7 +151,7 @@ class ResearchTaskAgSchema(StrictSchema):
 class ManyResearchTaskAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+        description="Scratchpad: think step by step here FIRST, analyze the input, weigh options, before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     tasks: list[ResearchTaskAgSchema] = Field(
         default_factory=list,
@@ -192,7 +192,7 @@ class SingleEvidenceEvaluationAgSchema(StrictSchema):
     )
     hypothesis_impacts: list[HypothesisImpactAgSchema] = Field(
         default_factory=list,
-        description="One entry per hypothesis this evidence item actually affects. Only hypotheses with a genuine, evidence-backed impact may be listed — hypotheses not listed here get no confidence change. Empty if the evidence changes nothing.",
+        description="One entry per hypothesis this evidence item actually affects. Only hypotheses with a genuine, evidence-backed impact may be listed; hypotheses not listed here get no confidence change. Empty if the evidence changes nothing.",
     )
     impact_reasoning: str = Field(
         default="",
@@ -203,7 +203,7 @@ class SingleEvidenceEvaluationAgSchema(StrictSchema):
 class EvidenceEvaluationAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+        description="Scratchpad: think step by step here FIRST, analyze the input, weigh options, before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     evaluations: list[SingleEvidenceEvaluationAgSchema] = Field(
         default_factory=list,
@@ -219,7 +219,7 @@ class EvidenceEvaluationAgSchema(StrictSchema):
 class DecisionAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+        description="Scratchpad: think step by step here FIRST, analyze the input, weigh options, before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     decision: Literal["CHALLENGE", "REFINE_PLAN", "REASSESS", "FINISH"] = Field(
         default="FINISH",
@@ -325,7 +325,7 @@ class ReportAlternateHypothesisAgSchema(StrictSchema):
 class ReportAgSchema(StrictSchema):
     reasoning: str = Field(
         default="",
-        description="Scratchpad: think step by step here FIRST — analyze the input, weigh options — before producing the structured output below. Keep it brief (a few sentences at most).",
+        description="Scratchpad: think step by step here FIRST, analyze the input, weigh options, before producing the structured output below. Keep it brief (a few sentences at most).",
     )
     title: str = Field(
         default="",
@@ -337,12 +337,12 @@ class ReportAgSchema(StrictSchema):
     )
     introduction: str = Field(
         default="",
-        description="Markdown introduction: context of the question, why it matters, and what the investigation set out to test — grounded in the gathered evidence. Cite evidence inline using the evidence IDs, e.g. [RT-001].",
+        description="Markdown introduction: context of the question, why it matters, and what the investigation set out to test, grounded in the gathered evidence. Cite evidence inline using the evidence IDs, e.g. [RT-001].",
     )
     hypotheses: list[ReportHypothesisAgSchema] = Field(
         default_factory=list,
         min_length=1,
-        description="One discussion entry per investigated hypothesis, covering ALL of them — including the ones that were rejected",
+        description="One discussion entry per investigated hypothesis, covering ALL of them, including the ones that were rejected",
     )
     alternate_hypotheses: list[ReportAlternateHypothesisAgSchema] = Field(
         default_factory=list,
@@ -350,7 +350,7 @@ class ReportAgSchema(StrictSchema):
     )
     evidence: str = Field(
         default="",
-        description="Markdown evidence section: what was actually found, organized by theme or hypothesis — not a raw dump. Every factual claim must carry an inline citation to an evidence ID, e.g. [RT-001].",
+        description="Markdown evidence section: what was actually found, organized by theme or hypothesis, not a raw dump. Every factual claim must carry an inline citation to an evidence ID, e.g. [RT-001].",
     )
     conclusion: str = Field(
         default="",

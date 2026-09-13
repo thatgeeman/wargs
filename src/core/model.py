@@ -136,11 +136,11 @@ class Model(ModelConfig):
                 logger.warning(f"Rate limited! Waiting for {delay} seconds...")
                 extra_response["retry_after"] = delay
             elif 400 <= e.status_code < 500:
-                # permanent — retrying will never help, fail fast
+                # permanent, so retrying will never help: fail fast
                 logger.error(f"Permanent client error {e.status_code}: {e.message}")
                 raise
             else:
-                # 5xx — transient, retryable
+                # 5xx: transient, retryable
                 logger.warning(f"Server error {e.status_code}")
                 extra_response["retry_after"] = wait_time
                 extra_response["status_code"] = e.status_code

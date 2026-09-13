@@ -86,7 +86,7 @@ class Tool(ABC):
                 ) + traces
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(
-                    f"Could not read existing trace file {self.trace_file} ({e}) — overwriting with current traces."
+                    f"Could not read existing trace file {self.trace_file} ({e}), overwriting with current traces."
                 )
         logger.debug(f"Saving trace for {self.name} to {self.trace_file}")
         with open(self.trace_file, "w") as f:

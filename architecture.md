@@ -1,4 +1,4 @@
-# Wahrgus — Architectural Reference
+# Wahrgus: Architectural Reference
 
 ## 1. Purpose
 
@@ -519,7 +519,7 @@ create RP-002
 
 Don't mutate an old plan into a new objective.
 
-Minor execution changes—retrying a search, refining a query, adding another source—stay within the existing plan.
+Minor execution changes (retrying a search, refining a query, adding another source) stay within the existing plan.
 
 **Rule:**
 **Change in execution → update the task.**

@@ -116,7 +116,7 @@ class Agent(ABC):
         all-optional fields, '{}' is schema-valid and constrained decoders can
         emit it as the minimal object; requiring every field makes empty
         responses impossible for grammar-constrained backends. Python-side
-        defaults (and validation) are unaffected — this only shapes what the
+        defaults (and validation) are unaffected; this only shapes what the
         model must produce."""
         if isinstance(node, dict):
             props = node.get("properties")
@@ -169,7 +169,7 @@ class Agent(ABC):
                 ) + traces
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(
-                    f"Could not read existing trace file {self.trace_file} ({e}) — overwriting with current traces."
+                    f"Could not read existing trace file {self.trace_file} ({e}), overwriting with current traces."
                 )
         logger.debug(f"Saving trace for {self.name} to {self.trace_file}")
         with open(self.trace_file, "w") as f:
@@ -189,7 +189,7 @@ class Agent(ABC):
         try:
             # first attempt stays deterministic (temperature=0); retries get
             # increasing randomness so a failed generation isn't repeated
-            # verbatim — at temperature=0 every retry would be identical.
+            # verbatim, since at temperature=0 every retry would be identical.
             model_kwargs = {"temperature": min(0.3 * (attempt - 1), 0.9)}
             if getattr(self, "_max_tokens_override", None):
                 # set by a previous truncated attempt (finish_reason='length')
@@ -212,7 +212,7 @@ class Agent(ABC):
             self.store_trace(choice_token)
             self.state_transition("GENERATION")
             if choice.finish_reason == "length":
-                # Truncated by max_tokens — content is missing, so the schema
+                # Truncated by max_tokens: content is missing, so the schema
                 # fixer cannot repair it. Treat as a failed attempt and
                 # regenerate from scratch with a doubled token budget (at
                 # temperature=0 an identical retry would truncate the same way).
@@ -261,7 +261,7 @@ class Agent(ABC):
                 )
                 time.sleep(sleep)
         logger.error(f"{self.name} failed after {self.max_retries} attempt(s).")
-        # save the trace on failure too — the raw responses of failed attempts
+        # save the trace on failure too, since the raw responses of failed attempts
         # are exactly what's needed for debugging
         self.state_transition("FAILED")
         self.save_trace()
@@ -300,7 +300,7 @@ def validate_schema_and_fix(
                 # Empty object '{}' or reasoning-only: validates only because
                 # every field has a default (pydantic does not validate
                 # defaults), but contains no payload content. Schema-fixing
-                # would have to invent content — treat as a failed generation
+                # would have to invent content, so treat as a failed generation
                 # so the agent retries from scratch instead.
                 logger.warning(
                     "Model returned no payload (empty object or reasoning only). "
@@ -553,7 +553,7 @@ class ContradictionAgent(Agent):
 class ReportAgent(Agent):
     """Synthesizes the finished investigation into a thesis-style markdown
     report. Run by the harness after the decision loop ends; the harness owns
-    rendering and the citation reference list — the agent only writes the
+    rendering and the citation reference list; the agent only writes the
     sections and cites evidence IDs inline."""
 
     def __init__(

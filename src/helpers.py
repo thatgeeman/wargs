@@ -71,7 +71,7 @@ def unwrap_json_strings(node):
     return node
 
 
-class WahrgusEncoder(json.JSONEncoder):
+class WargsEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, BaseModel):
             return obj.model_dump(mode="json")

@@ -8,7 +8,7 @@ load_dotenv()  # Load environment variables from .env file
 
 
 class Config:
-    config_dir = pathlib.Path.home() / ".wahrgus"
+    config_dir = pathlib.Path.home() / ".wargs"
 
     log_level = logging.INFO
     log_format = logging.Formatter(
@@ -50,7 +50,7 @@ class Config:
         return log_dir / "run.log"
 
     def to_dict(self):
-        """JSON-safe snapshot for state dumps (picked up by WahrgusEncoder).
+        """JSON-safe snapshot for state dumps (picked up by WargsEncoder).
         Excludes the non-serializable logging internals."""
         return {
             "config_dir": str(self.config_dir),

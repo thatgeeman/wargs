@@ -1,8 +1,8 @@
-# Wahrgus: Architectural Reference
+# Wargs: Architectural Reference
 
 ## 1. Purpose
 
-**Wahrgus is an autonomous, hypothesis-driven investigation engine.**
+**Wargs is an autonomous, hypothesis-driven investigation engine.**
 
 Given a question about a real-world phenomenon, it:
 
@@ -16,7 +16,7 @@ Given a question about a real-world phenomenon, it:
 
 The central idea is:
 
-> **Wahrgus does not optimize for producing a confident answer. It optimizes for finding explanations that survive attempts to disprove them.**
+> **Wargs does not optimize for producing a confident answer. It optimizes for finding explanations that survive attempts to disprove them.**
 
 ---
 
@@ -346,7 +346,7 @@ It should **not decide what the results mean**.
 
 # 8. Evidence model
 
-This is one of the most important boundaries in Wahrgus.
+This is one of the most important boundaries in Wargs.
 
 Separate:
 
@@ -564,7 +564,7 @@ This helps prevent confirmation bias.
 
 # 12. Autonomous investigation loop
 
-This is the core of Wahrgus.
+This is the core of Wargs.
 
 ```text
                   QUESTION
@@ -710,7 +710,7 @@ This makes the system easy to:
 The first interface can be entirely CLI-based.
 
 ```text
-$ wahrgus investigate "Why is Infineon doing worse than NVIDIA?"
+$ wargs investigate "Why is Infineon doing worse than NVIDIA?"
 ```
 
 Then:
@@ -747,10 +747,10 @@ INVESTIGATING
 Later:
 
 ```text
-$ wahrgus inspect 8c0c87b9
-$ wahrgus resume 8c0c87b9
-$ wahrgus replay 8c0c87b9
-$ wahrgus evaluate dataset.yaml
+$ wargs inspect 8c0c87b9
+$ wargs resume 8c0c87b9
+$ wargs replay 8c0c87b9
+$ wargs evaluate dataset.yaml
 ```
 
 ---
@@ -879,7 +879,7 @@ HypothesisUpdater    ContradictionAgent
 
 # 20. The architecture in one sentence
 
-> **Wahrgus is a stateful agent runtime in which constrained agents generate, investigate, challenge, and revise competing hypotheses, while a deterministic orchestrator controls state, tool execution, provenance, budgets, and the investigation lifecycle.**
+> **Wargs is a stateful agent runtime in which constrained agents generate, investigate, challenge, and revise competing hypotheses, while a deterministic orchestrator controls state, tool execution, provenance, budgets, and the investigation lifecycle.**
 
 ---
 
@@ -934,7 +934,7 @@ Research
 Update
 ```
 
-Then the distinctive part of Wahrgus becomes:
+Then the distinctive part of Wargs becomes:
 
 ```text
                  ┌───────────────┐

@@ -1,6 +1,6 @@
 # Investigation Flow
 
-This diagram summarizes the implemented Wahrgus investigation flow from
+This diagram summarizes the implemented Wargs investigation flow from
 `src/core/orchestrator/investigator.py`, with agent and tool responsibilities from
 `src/core/agent/agent.py` and `src/tools/executor.py`.
 

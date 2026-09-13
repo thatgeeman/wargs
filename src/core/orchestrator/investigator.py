@@ -5,7 +5,7 @@ from abc import ABC
 from collections import OrderedDict
 
 from ...config import Config
-from ...helpers import WahrgusEncoder, run_with_timeout
+from ...helpers import WargsEncoder, run_with_timeout
 from ...tools.executor import ToolExecutor
 from ...tools.store import REGISTERED_TOOLS, WebSearch
 from ..agent import (
@@ -59,7 +59,7 @@ class BaseState(ABC):
 
     def to_json(self):
         data = self.__dict__
-        return json.dumps(data, cls=WahrgusEncoder, indent=4)
+        return json.dumps(data, cls=WargsEncoder, indent=4)
 
     @classmethod
     def from_json(cls, json_str: str):

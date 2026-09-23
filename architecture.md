@@ -29,15 +29,27 @@ The central idea is:
 ```mermaid
 flowchart TD
     USER -->|question| ORCH["InvestigationState (orchestrator)<br/>state machine / budgets / retries / trace dumps"]
-    ORCH --> HYP["Hypothesis Agent"]
-    ORCH --> PLAN["Research Planner / Task agents"]
-    ORCH --> CONTRA["Contradiction Agent"]
-    PLAN --> EXEC["ToolExecutor<br/>WebSearch (Tavily)"]
-    EXEC --> EVAL["EvidenceEvaluator<br/>relevance + per-hypothesis impact"]
-    EVAL --> UPDATE["Harness-owned update<br/>plan status + confidence update"]
-    UPDATE --> DECIDE["DecisionAgent<br/>CHALLENGE / REFINE_PLAN / REASSESS / FINISH"]
-    DECIDE --> REPORT["ReportAgent<br/>sections + verdicts<br/>(harness renders report.md)"]
+    ORCH --> HYP["Hypothesis Agent<br/>competing hypotheses + predictions"]
+    HYP --> PLAN["Research Planner / Task agents<br/>highest-value next research actions"]
+
+    subgraph LOOP["AGENTIC LOOP (repeats until the evidence is sufficient)"]
+        direction TB
+        PLAN --> EXEC["ToolExecutor<br/>WebSearch (Tavily)"]
+        EXEC --> EVAL["EvidenceEvaluator<br/>relevance + per-hypothesis impact"]
+        EVAL --> UPDATE["Harness-owned update<br/>plan status + confidence update"]
+        UPDATE --> DECIDE["DecisionAgent<br/>CHALLENGE / REFINE_PLAN / REASSESS / FINISH"]
+        DECIDE -->|CHALLENGE| CONTRA["Contradiction Agent<br/>attack the leading hypothesis"]
+        CONTRA -->|new plans + tasks| PLAN
+        DECIDE -->|REFINE_PLAN / REASSESS| PLAN
+    end
+
+    DECIDE -->|FINISH| REPORT["ReportAgent<br/>sections + verdicts<br/>(harness renders report.md)"]
 ```
+
+The loop is the core of the system: each round of research updates the
+hypotheses, and the DecisionAgent picks the next step (refine, reassess, or
+challenge) until it concludes the evidence is sufficient, the budget runs
+out, or the harness force-finishes on stagnation.
 
 ---
 

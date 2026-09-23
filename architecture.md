@@ -26,63 +26,17 @@ The central idea is:
 
 # 2. High-level architecture
 
-```text
-                              USER
-                               │
-                               │ question
-                               ▼
-                    ┌──────────────────────┐
-                    │  InvestigationState  │
-                    │  (orchestrator)      │
-                    │                      │
-                    │ state machine /      │
-                    │ budgets / retries /  │
-                    │ trace dumps          │
-                    └──────────┬───────────┘
-                               │
-           ┌───────────────────┼────────────────────────┐
-           │                   │                        │
-           ▼                   ▼                        ▼
-   ┌───────────────┐   ┌───────────────┐       ┌────────────────┐
-   │  Hypothesis   │   │   Research    │       │ Contradiction  │
-   │    Agent      │   │Planner / Task │       │     Agent      │
-   └───────────────┘   └───────┬───────┘       └────────────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │    ToolExecutor      │
-                    │  WebSearch (Tavily)  │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │  EvidenceEvaluator   │
-                    │ relevance + per-     │
-                    │ hypothesis impact    │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ Harness-owned update │
-                    │ plan status +        │
-                    │ confidence update    │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │    DecisionAgent     │
-                    │ CHALLENGE /          │
-                    │ REFINE_PLAN /        │
-                    │ REASSESS / FINISH    │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │     ReportAgent      │
-                    │ sections + verdicts  │
-                    │ (harness renders     │
-                    │  report.md)          │
-                    └──────────────────────┘
+```mermaid
+flowchart TD
+    USER -->|question| ORCH["InvestigationState (orchestrator)<br/>state machine / budgets / retries / trace dumps"]
+    ORCH --> HYP["Hypothesis Agent"]
+    ORCH --> PLAN["Research Planner / Task agents"]
+    ORCH --> CONTRA["Contradiction Agent"]
+    PLAN --> EXEC["ToolExecutor<br/>WebSearch (Tavily)"]
+    EXEC --> EVAL["EvidenceEvaluator<br/>relevance + per-hypothesis impact"]
+    EVAL --> UPDATE["Harness-owned update<br/>plan status + confidence update"]
+    UPDATE --> DECIDE["DecisionAgent<br/>CHALLENGE / REFINE_PLAN / REASSESS / FINISH"]
+    DECIDE --> REPORT["ReportAgent<br/>sections + verdicts<br/>(harness renders report.md)"]
 ```
 
 ---
@@ -91,49 +45,21 @@ The central idea is:
 
 The most important design principle is to separate **probabilistic reasoning** from **deterministic control**.
 
-```text
-            PROBABILISTIC LAYER (agents, src/core/agent/)
-    ──────────────────────────────────
-
-    QuestionAnalyzerAgent
-    HypothesisAgent
-    ResearchPlanner
-    ResearchTask (agent)
-    EvidenceEvaluator
-    DecisionAgent
-    ContradictionAgent
-    ReportAgent
-    RetrySchemaAgent (repairs invalid structured output)
-
-                 │
-                 ▼
-
-            STRUCTURED DATA (pydantic schemas, src/core/agent/schemas.py)
-    ──────────────────────────────────
-
-    Hypotheses
-    ResearchPlans
-    ResearchTasks
-    Evidence evaluations
-    Contradictions
-    Decision
-    Report
-    InvestigationState
-
-                 │
-                 ▼
-
-            DETERMINISTIC LAYER (harness)
-    ──────────────────────────────────
-
-    InvestigationState (orchestrator)
-    ToolExecutor / registered tools
-    Schema validation + repair
-    Plan ID assignment + plan status transitions
-    Confidence updates
-    Retries / timeouts / budgets
-    Report rendering
-    Trace persistence
+```mermaid
+flowchart TD
+    subgraph PROB["PROBABILISTIC LAYER (agents, src/core/agent/)"]
+        direction TB
+        A1["QuestionAnalyzerAgent<br/>HypothesisAgent<br/>ResearchPlanner<br/>ResearchTask (agent)<br/>EvidenceEvaluator<br/>DecisionAgent<br/>ContradictionAgent<br/>ReportAgent<br/>RetrySchemaAgent (repairs invalid structured output)"]
+    end
+    subgraph DATA["STRUCTURED DATA (pydantic schemas, src/core/agent/schemas.py)"]
+        direction TB
+        D1["Hypotheses<br/>ResearchPlans<br/>ResearchTasks<br/>Evidence evaluations<br/>Contradictions<br/>Decision<br/>Report<br/>InvestigationState"]
+    end
+    subgraph DET["DETERMINISTIC LAYER (harness)"]
+        direction TB
+        H1["InvestigationState (orchestrator)<br/>ToolExecutor / registered tools<br/>Schema validation + repair<br/>Plan ID assignment + plan status transitions<br/>Confidence updates<br/>Retries / timeouts / budgets<br/>Report rendering<br/>Trace persistence"]
+    end
+    PROB --> DATA --> DET
 ```
 
 ### Rule
@@ -381,24 +307,18 @@ After the bootstrap sequence (analyze → clarify → hypothesize → plan →
 task → execute → evaluate), `agent_loop()` runs up to `max_steps`
 iterations:
 
-```text
-              ┌────────────────────┐
-              │   DecisionAgent    │  sees: question, clarification, hypotheses,
-              └─────────┬──────────┘        plans, tasks, evidence, evaluation
-                        │
-        ┌───────────────┼───────────────┬──────────────┐
-        ▼               ▼               ▼              ▼
-     FINISH        REFINE_PLAN       REASSESS       CHALLENGE
-        │          new plans +       new tasks for   ContradictionAgent per
-        │          new tasks         ACTIVE plans    focus hypothesis,
-        │               │               │            then new plans + tasks
-        │               └───────┬───────┘            (if contradictions found)
-        │                       ▼
-        │               execute tasks → evaluate evidence → update
-        │                       │
-        │                       └──→ next iteration
-        ▼
-   exit loop → ReportAgent
+```mermaid
+flowchart TD
+    DA["DecisionAgent<br/><i>sees: question, clarification, hypotheses,<br/>plans, tasks, evidence, evaluation</i>"]
+    DA --> FINISH
+    DA --> RP["REFINE_PLAN<br/>new plans + new tasks"]
+    DA --> RE["REASSESS<br/>new tasks for ACTIVE plans"]
+    DA --> CH["CHALLENGE<br/>ContradictionAgent per focus hypothesis,<br/>then new plans + tasks (if contradictions found)"]
+    RP --> EXEC["execute tasks → evaluate evidence → update"]
+    RE --> EXEC
+    CH --> EXEC
+    EXEC --> DA
+    FINISH --> EXIT["exit loop → ReportAgent"]
 ```
 
 The loop also exits on `force_finish`, on max iterations, or on an empty

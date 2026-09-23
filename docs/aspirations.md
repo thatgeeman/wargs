@@ -11,8 +11,9 @@ they land in code.
 
 Separate the layers of what evidence *is*:
 
-```text
-SOURCE → OBSERVATION → CLAIM → INTERPRETATION → HYPOTHESIS
+```mermaid
+flowchart LR
+    SOURCE --> OBSERVATION --> CLAIM --> INTERPRETATION --> HYPOTHESIS
 ```
 
 Example:
@@ -81,10 +82,9 @@ Additional tracked state:
 
 A complete audit trail of every significant transition:
 
-```text
-INVESTIGATION_CREATED → HYPOTHESES_GENERATED → RESEARCH_PLAN_CREATED →
-TASK_STARTED → TOOL_CALLED → EVIDENCE_RECEIVED → HYPOTHESIS_UPDATED →
-CONTRADICTION_FOUND → NEW_TASK_CREATED → INVESTIGATION_COMPLETED
+```mermaid
+flowchart LR
+    INVESTIGATION_CREATED --> HYPOTHESES_GENERATED --> RESEARCH_PLAN_CREATED --> TASK_STARTED --> TOOL_CALLED --> EVIDENCE_RECEIVED --> HYPOTHESIS_UPDATED --> CONTRADICTION_FOUND --> NEW_TASK_CREATED --> INVESTIGATION_COMPLETED
 ```
 
 Today there is state-transition logging plus an `events[]` list that

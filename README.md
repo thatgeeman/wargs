@@ -14,8 +14,8 @@ Given a question about a real-world phenomenon, Wargs:
 
 The central idea: **Wargs does not optimize for producing a confident answer. It optimizes for finding explanations that survive attempts to disprove them.**
 
-The name is a nod to *winning arguments*: hypotheses compete, and only the
-ones that withstand contradictory evidence win.
+The name reads as **W-args** — a nod to *winning arguments*: hypotheses
+compete, and only the ones that withstand contradictory evidence win.
 
 See [architecture.md](architecture.md) for the architectural reference (as
 implemented), [docs/investigation-flow.md](docs/investigation-flow.md) for the

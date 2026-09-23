@@ -314,7 +314,7 @@ items.
 `update_hypothesis()` (in `InvestigationState`) applies the evaluation
 deterministically:
 
-**Plan transitions** — strongest targeted impact wins per plan, computed
+**Plan transitions**: strongest targeted impact wins per plan, computed
 only over the hypotheses the plan targets:
 
 ```text
@@ -323,7 +323,7 @@ weakening     → WEAKENED
 supporting    → COMPLETED
 ```
 
-**Confidence updates** — only hypotheses explicitly listed with a
+**Confidence updates**: only hypotheses explicitly listed with a
 non-neutral impact change; the magnitude is weighted by the originating
 plan's priority:
 
@@ -336,7 +336,7 @@ contradictory: c' = c − 2·w·c
 Every update is appended to the hypothesis's `confidence_history` and
 logged in `state.events` with the evaluator's reasoning.
 
-**Stagnation break** — rounds with no relevant or only-neutral evidence
+**Stagnation break**: rounds with no relevant or only-neutral evidence
 increment `neutral_streak`; at `max_neutral_streak` (2) consecutive rounds
 the harness sets `force_finish` and ends the loop instead of researching
 forever.
@@ -416,7 +416,7 @@ post-processed before sending:
 
 * all properties are declared **required** (so grammar-constrained decoders
   can't emit `{}`),
-* `harness_only` fields (e.g. task `result`) are stripped — the LLM never
+* `harness_only` fields (e.g. task `result`) are stripped, so the LLM never
   sees fields it must not fill,
 * `contentSchema` metadata from `Json[...]` fields is stripped (strict
   endpoints reject it).
@@ -457,7 +457,7 @@ where the dump was taken (a pending decision is executed, not re-made).
 The ReportAgent only **proposes** the report (`ReportAgSchema`): title,
 abstract, introduction, one verdict + discussion per hypothesis (including
 rejected ones), alternative hypotheses, an evidence section, and a
-conclusion — all citing evidence by task ID inline (`[RT-001]`).
+conclusion, all citing evidence by task ID inline (`[RT-001]`).
 
 The harness owns the final markdown document: section order, the final
 confidence values next to each verdict, a safety net for hypotheses the

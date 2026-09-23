@@ -1,5 +1,9 @@
 # Wargs: Architectural Reference
 
+This document describes the architecture **as implemented** in `src/`.
+Ideas that are designed but not yet built live in
+[docs/aspirations.md](docs/aspirations.md).
+
 ## 1. Purpose
 
 **Wargs is an autonomous, hypothesis-driven investigation engine.**
@@ -28,79 +32,57 @@ The central idea is:
                                │ question
                                ▼
                     ┌──────────────────────┐
-                    │     ORCHESTRATOR     │
+                    │  InvestigationState  │
+                    │  (orchestrator)      │
                     │                      │
-                    │ workflow / state /   │
-                    │ budgets / scheduling │
+                    │ state machine /      │
+                    │ budgets / retries /  │
+                    │ trace dumps          │
+                    └──────────┬───────────┘
+                               │
+           ┌───────────────────┼────────────────────────┐
+           │                   │                        │
+           ▼                   ▼                        ▼
+   ┌───────────────┐   ┌───────────────┐       ┌────────────────┐
+   │  Hypothesis   │   │   Research    │       │ Contradiction  │
+   │    Agent      │   │Planner / Task │       │     Agent      │
+   └───────────────┘   └───────┬───────┘       └────────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │    ToolExecutor      │
+                    │  WebSearch (Tavily)  │
                     └──────────┬───────────┘
                                │
                                ▼
                     ┌──────────────────────┐
-                    │  INVESTIGATION STATE │
-                    │                      │
-                    │ question              │
-                    │ hypotheses            │
-                    │ evidence              │
-                    │ contradictions        │
-                    │ sources               │
-                    │ timeline              │
-                    │ history               │
-                    └──────────┬───────────┘
-                               │
-           ┌───────────────────┼────────────────────┐
-           │                   │                    │
-           ▼                   ▼                    ▼
-   ┌───────────────┐   ┌───────────────┐   ┌────────────────┐
-   │  Hypothesis   │   │   Research    │   │ Contradiction  │
-   │    Agent      │   │    Planner    │   │     Agent      │
-   └───────────────┘   └───────┬───────┘   └────────────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │   RESEARCH TASKS     │
-                    │                      │
-                    │ objective            │
-                    │ hypotheses targeted  │
-                    │ expected outcomes    │
-                    │ tool calls           │
+                    │  EvidenceEvaluator   │
+                    │ relevance + per-     │
+                    │ hypothesis impact    │
                     └──────────┬───────────┘
                                │
                                ▼
                     ┌──────────────────────┐
-                    │  RESEARCH EXECUTOR   │
-                    │                      │
-                    │ executes tools       │
-                    │ returns raw results  │
+                    │ Harness-owned update │
+                    │ plan status +        │
+                    │ confidence update    │
                     └──────────┬───────────┘
                                │
                                ▼
                     ┌──────────────────────┐
-                    │ EVIDENCE /           │
-                    │ PROVENANCE LAYER     │
+                    │    DecisionAgent     │
+                    │ CHALLENGE /          │
+                    │ REFINE_PLAN /        │
+                    │ REASSESS / FINISH    │
                     └──────────┬───────────┘
                                │
                                ▼
                     ┌──────────────────────┐
-                    │ HYPOTHESIS UPDATER   │
-                    │                      │
-                    │ strengthen           │
-                    │ weaken                │
-                    │ reject                │
-                    │ spawn                 │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                         STOP DECISION
-                          /           \
-                        no             yes
-                        │                │
-                        └──────┐    ┌────┘
-                               ▼    ▼
-                           RESEARCH  SYNTHESIS
-                                      │
-                                      ▼
-                                INVESTIGATION
-                                   REPORT
+                    │     ReportAgent      │
+                    │ sections + verdicts  │
+                    │ (harness renders     │
+                    │  report.md)          │
+                    └──────────────────────┘
 ```
 
 ---
@@ -110,102 +92,97 @@ The central idea is:
 The most important design principle is to separate **probabilistic reasoning** from **deterministic control**.
 
 ```text
-            PROBABILISTIC LAYER
+            PROBABILISTIC LAYER (agents, src/core/agent/)
     ──────────────────────────────────
 
-    Hypothesis Agent
-    Research Planner
-    Contradiction Agent
-    Hypothesis Updater
-    Synthesis Agent
+    QuestionAnalyzerAgent
+    HypothesisAgent
+    ResearchPlanner
+    ResearchTask (agent)
+    EvidenceEvaluator
+    DecisionAgent
+    ContradictionAgent
+    ReportAgent
+    RetrySchemaAgent (repairs invalid structured output)
 
                  │
                  ▼
 
-            STRUCTURED DATA
+            STRUCTURED DATA (pydantic schemas, src/core/agent/schemas.py)
     ──────────────────────────────────
 
     Hypotheses
+    ResearchPlans
     ResearchTasks
-    Evidence
-    Claims
-    Sources
+    Evidence evaluations
+    Contradictions
+    Decision
+    Report
     InvestigationState
 
                  │
                  ▼
 
-            DETERMINISTIC LAYER
+            DETERMINISTIC LAYER (harness)
     ──────────────────────────────────
 
-    Orchestrator
-    State management
-    Tool execution
-    Validation
-    Budgets
-    Retries
-    Event logging
+    InvestigationState (orchestrator)
+    ToolExecutor / registered tools
+    Schema validation + repair
+    Plan ID assignment + plan status transitions
+    Confidence updates
+    Retries / timeouts / budgets
+    Report rendering
+    Trace persistence
 ```
 
 ### Rule
 
 > **Agents propose. The harness controls.**
 
-An agent should not directly mutate the global investigation or bypass the executor.
+Agents never mutate global investigation state directly and never execute
+tools. The harness assigns plan IDs, owns plan status transitions, applies
+confidence updates, and renders the final report.
 
 ---
 
 # 4. InvestigationState
 
-`InvestigationState` is the central object representing one investigation.
+`InvestigationState` (`src/core/orchestrator/investigator.py`) is the central
+object representing one investigation. It **is** the orchestrator: a state
+machine that runs a fixed bootstrap sequence and then hands off to the
+decision loop.
 
 ```text
 InvestigationState
 │
-├── id
 ├── question
-├── status
-├── hypotheses[]
+├── question_analysis        # QuestionAnalysisAgSchema
+├── clarification            # optional user answer
 │
-├── evidence[]
-├── sources[]
-├── contradictions[]
-├── timeline[]
+├── hypotheses[]             # HypothesisAgSchema (confidence, confidence_history)
+├── research_plans[]         # ResearchPlannerAgSchema, immutable objectives
+├── research_tasks[]         # ResearchTaskAgSchema for the current round
 │
-├── pending_tasks[]
-├── completed_tasks[]
+├── evidence[]               # task dicts with harness-attached results
+├── evidence_evaluation      # EvidenceEvaluationAgSchema as dict
+├── evidence_impact          # round-level histogram of impacts
+├── contradictions[]         # ContradictionAgent instances
 │
-├── confidence_history[]
-├── open_questions[]
+├── decision / next_action   # DecisionAgSchema output
+├── events[]                 # confidence_update / force_finish events
 │
-└── event_history[]
+├── report / report_path     # ReportAgSchema + written report.md
+│
+└── harness controls
+    ├── max_steps (budget), max_retries, timeout_perstep_s
+    ├── neutral_streak / max_neutral_streak / force_finish
+    └── _decision_made / _decision_exec (resume bookkeeping)
 ```
 
-Example:
-
-```text
-Question:
-Why is Infineon doing worse than NVIDIA?
-
-Hypotheses:
-H1 → different market exposure
-H2 → stronger NVIDIA market position / margins
-H3 → investor sentiment / valuation
-H4 → Infineon-specific problems
-
-Evidence:
-...
-
-Pending tasks:
-...
-
-Status:
-INVESTIGATING
-```
-
-The **Orchestrator owns this state**.
-
-Agents receive relevant state and return structured results.
+State is dumped to JSON (`dump_trace()`) under the session trace directory
+after the bootstrap steps and around every decision, so a crashed run can be
+resumed (see §13).
 
 ---
 
@@ -213,325 +190,160 @@ Agents receive relevant state and return structured results.
 
 ### Responsibility
 
-Generate competing explanations for the initial question.
+Generate competing explanations for the question, given the question
+analysis and optional user clarification.
 
-### It should produce
+### Output (`HypothesisAgSchema`)
 
 ```text
 Hypothesis
-├── id
-├── statement
-├── prior_confidence
+├── id (int, >= 1)
+├── hypothesis (statement)
+├── confidence (prior, 0..1)
+├── confidence_history[]     # filled by the harness, not the agent
 ├── supporting_predictions[]
 └── weakening_predictions[]
 ```
 
-Example:
-
-```text
-H1
-Different market segments explain the performance gap.
-
-Prior confidence: 0.85
-
-Supporting predictions:
-- NVIDIA AI-related revenue is growing rapidly
-- Infineon is more exposed to slower automotive/industrial markets
-
-Weakening predictions:
-- Comparable segments show similar growth
-- Infineon's markets outperform NVIDIA's
-```
-
 ### Boundary
 
-The Hypothesis Agent **doesn't research the claims**.
-
-It says:
+The Hypothesis Agent **doesn't research the claims**. It says:
 
 > “What should be true if this explanation is correct?”
 
 ---
 
-# 6. Research Planner
+# 6. Research Planner & Research Task agents
 
-### Responsibility
+### ResearchPlanner
 
-Identify the **highest-value next research actions**.
-
-Input:
+Produces `ResearchPlan`s (`ResearchPlannerAgSchema`):
 
 ```text
-question
-hypotheses
-predictions
-existing evidence
-known gaps
-available tools
-```
-
-Output:
-
-```text
-ResearchTask
-├── id
-├── objective
+ResearchPlan
+├── id                       # harness-assigned: RP-001, RP-002, ...
+├── plan (objective)
 ├── rationale
-├── hypotheses_targeted[]
-├── supporting_result
-├── weakening_result
-├── priority
-└── tool_calls[]
-```
-
-Conceptually:
-
-```text
-Hypotheses
-   │
-   ▼
-What don't we know?
-   │
-   ▼
-What evidence would distinguish them?
-   │
-   ▼
-Which research action gives the most information?
-   │
-   ▼
-ResearchTask
+├── hypotheses_targeted[]    # hypothesis int IDs
+├── supporting_result        # expected supporting evidence
+├── weakening_result         # expected weakening evidence
+├── priority (0..1)          # weights confidence updates
+└── status                   # ACTIVE | WEAKENED | INVALIDATED | COMPLETED
 ```
 
 A key principle:
 
 > **Don't research everything. Research what can change the hypothesis ranking.**
 
----
+### ResearchTask (agent)
 
-# 7. Research Executor
-
-The Research Planner should **not execute tools itself**.
-
-The executor receives a task:
+Converts ACTIVE plans into concrete tool calls (`ResearchTaskAgSchema`):
 
 ```text
 ResearchTask
-      │
-      ▼
-ResearchExecutor
-      │
-      ├── WebSearch
-      ├── Dataset query
-      ├── API
-      └── other tools
-      │
-      ▼
-ResearchResult
+├── id            # e.g. RT-001
+├── plan_id       # the RP this task executes
+├── tool          # must be a registered tool
+├── parameters    # JSON-encoded tool arguments
+└── result        # harness-only: attached after execution, never sent to the LLM
 ```
 
-The executor should be relatively dumb.
+### Plan lifecycle (implemented)
 
-Its job is to:
-
-* execute requested tools,
-* validate tool inputs,
-* capture results,
-* capture failures,
-* preserve provenance,
-* return structured results.
-
-It should **not decide what the results mean**.
-
----
-
-# 8. Evidence model
-
-This is one of the most important boundaries in Wargs.
-
-Separate:
-
-```text
-SOURCE
-   ↓
-OBSERVATION
-   ↓
-CLAIM
-   ↓
-INTERPRETATION
-   ↓
-HYPOTHESIS
-```
-
-Example:
-
-```text
-Source:
-Infineon annual report
-
-Observation:
-Automotive revenue declined X%.
-
-Claim:
-Infineon's automotive segment experienced a decline.
-
-Interpretation:
-This may explain part of Infineon's weaker performance.
-
-Hypothesis:
-Different market exposure contributes to the performance gap.
-```
-
-This prevents the system from treating a source's interpretation as an established fact.
-
----
-
-# 9. Provenance / source layer
-
-Every piece of evidence should retain metadata:
-
-```text
-Evidence
-├── source
-├── source_type
-├── published_at
-├── retrieved_at
-├── URL / identifier
-├── source_family
-├── related_sources[]
-├── observation
-└── provenance
-```
-
-The system should **not claim neutrality**.
-
-Instead it evaluates:
-
-* source diversity,
-* source independence,
-* duplication,
-* primary vs secondary sources,
-* temporal relevance,
-* geographic coverage.
-
-The goal is not:
-
-> “This source is unbiased.”
-
-The goal is:
-
-> “How dependent is our conclusion on this particular source or source family?”
-
----
-
-# 10. Hypothesis Updater
-
-The updater receives:
-
-```text
-current hypotheses
-+
-new evidence
-+
-research task's expected outcomes
-```
-
-and updates hypothesis state.
-
-Possible transitions:
-
-```text
-0.85 → 0.91   strengthened
-0.85 → 0.72   weakened
-0.85 → 0.31   strongly challenged
-0.85 → rejected
-```
-
-Hypotheses can also:
-
-```text
-spawn
-merge
-split
-remain unresolved
-```
-
-Track confidence over time:
-
-```text
-H1
-
-0.50 ──→ 0.71 ──→ 0.83 ──→ 0.62
-                         ↑
-                  contradictory evidence
-```
-
-### Evidence evaluation loop
-
-After research execution:
-
-```text
-Evidence
-   ↓
-EvidenceEvaluator
-   ↓
-Is it relevant?
- ├─ No → generate new research task
- └─ Yes
-      ↓
-   What is the impact?
-   ├─ Supporting → update hypothesis
-   ├─ Weakening → update hypothesis + feed weakness into next research
-   ├─ Contradictory → update hypothesis + investigate alternative
-   └─ Neutral/insufficient → generate new research task
-```
-
-The evaluator should distinguish:
-
-```text
-relevance ≠ impact
-```
-
-Its job is to determine **whether the evidence matters and what it does to current beliefs**, not to perform the actual hypothesis update.
-
-Each piece of evidence is evaluated independently (one evaluation per evidence item); the harness aggregates the per-item verdicts, strongest signal first: contradictory > weakening > supporting > neutral.
-
----
-
-### Research plan lifecycle
-
-Treat `ResearchPlan` as **immutable**.
-
-A plan represents:
-
-> “Given what we currently know, this is what we need to establish.”
-
-When new evidence materially changes the investigation:
-
-```text
-RP-001
-  ↓
-evidence changes understanding
-  ↓
-RP-001 → WEAKENED / INVALIDATED / COMPLETED
-  ↓
-create RP-002
-```
-
-Don't mutate an old plan into a new objective.
-
-Minor execution changes (retrying a search, refining a query, adding another source) stay within the existing plan.
+`ResearchPlan`s are **immutable**: evidence never rewrites a plan's
+objective, it only transitions its status. Plan IDs and initial status are
+harness-owned (`_assign_plan_ids`); LLM-proposed IDs are ignored. Only
+ACTIVE plans are executed. New objectives are appended as new plans
+(RP-002, RP-003, ...), never mutated in place.
 
 **Rule:**
-**Change in execution → update the task.**
-**Change in research objective → create a new plan.**
-
-New plans are appended with fresh deterministic IDs (RP-002, RP-003, …); existing plans keep their ID and objective, only their status transitions.
+**Change in execution → new task.**
+**Change in research objective → new plan.**
 
 ---
 
-# 11. Contradiction Agent
+# 7. ToolExecutor and tools
 
-This agent has a deliberately different objective.
+The planner/task agents never call tools. The harness executes each task
+through `ToolExecutor` (`src/tools/executor.py`), which validates the tool
+name against `REGISTERED_TOOLS`, runs it, and attaches the raw result to
+the task record.
+
+Currently registered tools:
+
+| Tool        | Backend | Notes                                  |
+| ----------- | ------- | -------------------------------------- |
+| `WebSearch` | Tavily  | Returns web results, short answer, follow-up questions |
+
+Tools self-register via `Tool.__init_subclass__` under a stable
+`tool_name`, which is what survives in traces and lets resume rebuild live
+tool instances.
+
+The executor is deliberately dumb: it executes, captures results and
+failures, and never interprets what results mean.
+
+---
+
+# 8. Evidence evaluation
+
+`EvidenceEvaluator` evaluates **each evidence item independently**
+(`SingleEvidenceEvaluationAgSchema`):
+
+```text
+Per evidence item:
+├── evidence_id           # the task ID that produced it
+├── evidence_relevant     # does it address the question/plans?
+├── relevance_reasoning
+├── hypothesis_impacts[]  # per-hypothesis: supporting | weakening |
+│                         #   contradictory | neutral + reasoning
+└── impact_reasoning
+```
+
+The evaluator distinguishes **relevance ≠ impact**. It decides whether
+evidence matters and what it does to each hypothesis; it does **not**
+perform the update.
+
+The harness then aggregates a round-level histogram
+(`state.evidence_impact`) over the per-hypothesis impacts of all relevant
+items.
+
+---
+
+# 9. Harness-owned hypothesis update
+
+`update_hypothesis()` (in `InvestigationState`) applies the evaluation
+deterministically:
+
+**Plan transitions** — strongest targeted impact wins per plan, computed
+only over the hypotheses the plan targets:
+
+```text
+contradictory → INVALIDATED
+weakening     → WEAKENED
+supporting    → COMPLETED
+```
+
+**Confidence updates** — only hypotheses explicitly listed with a
+non-neutral impact change; the magnitude is weighted by the originating
+plan's priority:
+
+```text
+supporting:    c' = c + w·(1 − c)
+weakening:     c' = c − w·c
+contradictory: c' = c − 2·w·c
+```
+
+Every update is appended to the hypothesis's `confidence_history` and
+logged in `state.events` with the evaluator's reasoning.
+
+**Stagnation break** — rounds with no relevant or only-neutral evidence
+increment `neutral_streak`; at `max_neutral_streak` (2) consecutive rounds
+the harness sets `force_finish` and ends the loop instead of researching
+forever.
+
+---
+
+# 10. Contradiction Agent
 
 The ordinary research process asks:
 
@@ -541,117 +353,121 @@ The contradiction agent asks:
 
 > **“What evidence would make our leading explanation wrong?”**
 
+When the DecisionAgent chooses `CHALLENGE`, one `ContradictionAgent` runs
+per focus hypothesis and produces (`ContradictionAgSchema`):
+
 ```text
-Leading hypothesis
-        │
-        ▼
-Contradiction Agent
-        │
-        ├── search counterevidence
-        ├── identify competing explanation
-        └── identify weak assumptions
-        │
-        ▼
-Contradiction
-        │
-        ▼
-Hypothesis Updater
+├── contradiction_found (bool)
+├── contradiction_type      # DIRECT_CONTRADICTION | MISSING_EXPECTED_EVIDENCE |
+│                           # ALTERNATIVE_EXPLANATION | SOURCE_DEPENDENCE |
+│                           # TEMPORAL_MISMATCH | SCOPE_MISMATCH
+├── contradiction
+├── evidence_ids[]          # evidence it contradicts
+├── alternative_hypothesis
+├── severity                # LOW | MEDIUM | HIGH
+└── recommended_followup
 ```
 
-This helps prevent confirmation bias.
+If no contradiction is found, the loop moves straight to the next
+decision. If one is found, its recommended follow-ups are turned into new
+plans and tasks so the next round gathers **new** evidence instead of
+re-executing the previous round's tasks.
 
 ---
 
-# 12. Autonomous investigation loop
+# 11. The decision loop (implemented autonomy)
 
-This is the core of Wargs.
+After the bootstrap sequence (analyze → clarify → hypothesize → plan →
+task → execute → evaluate), `agent_loop()` runs up to `max_steps`
+iterations:
 
 ```text
-                  QUESTION
-                     │
-                     ▼
-               HYPOTHESIZE
-                     │
-                     ▼
-             IDENTIFY GAPS
-                     │
-                     ▼
-             PLAN RESEARCH
-                     │
-                     ▼
-             EXECUTE RESEARCH
-                     │
-                     ▼
-              COLLECT EVIDENCE
-                     │
-                     ▼
-             UPDATE HYPOTHESES
-                     │
-                     ▼
-             ATTACK LEADING ONE
-                     │
-                     ▼
-             DO WE KNOW ENOUGH?
-                /           \
-              NO             YES
-              │               │
-              ▼               ▼
-        PLAN NEXT STEP       SYNTHESIZE
-              │               │
-              └───────────────┘
+              ┌────────────────────┐
+              │   DecisionAgent    │  sees: question, clarification, hypotheses,
+              └─────────┬──────────┘        plans, tasks, evidence, evaluation
+                        │
+        ┌───────────────┼───────────────┬──────────────┐
+        ▼               ▼               ▼              ▼
+     FINISH        REFINE_PLAN       REASSESS       CHALLENGE
+        │          new plans +       new tasks for   ContradictionAgent per
+        │          new tasks         ACTIVE plans    focus hypothesis,
+        │               │               │            then new plans + tasks
+        │               └───────┬───────┘            (if contradictions found)
+        │                       ▼
+        │               execute tasks → evaluate evidence → update
+        │                       │
+        │                       └──→ next iteration
+        ▼
+   exit loop → ReportAgent
 ```
 
-The key point:
+The loop also exits on `force_finish`, on max iterations, or on an empty
+decision (error).
 
 > **Autonomy means selecting the next useful investigation step.**
 
-It doesn't necessarily mean modifying a real-world system.
+---
+
+# 12. Structured output contract
+
+All agents emit strict structured output (`StrictSchema`, pydantic
+`extra="forbid"` + `json_schema` strict mode). The wire schema is
+post-processed before sending:
+
+* all properties are declared **required** (so grammar-constrained decoders
+  can't emit `{}`),
+* `harness_only` fields (e.g. task `result`) are stripped — the LLM never
+  sees fields it must not fill,
+* `contentSchema` metadata from `Json[...]` fields is stripped (strict
+  endpoints reject it).
+
+Reliability behavior in `Agent.run` / `Model.call`:
+
+* first attempt at temperature 0; retries add increasing temperature and
+  exponential backoff with jitter (honoring `retry_after`),
+* responses truncated at `max_tokens` (`finish_reason="length"`) are
+  retried with a doubled token budget,
+* invalid JSON/schema output goes to `RetrySchemaAgent`, which repairs it
+  against the validation errors; empty/reasoning-only payloads are treated
+  as failed generations and retried from scratch,
+* every attempt (success or failure) is traced with token usage.
 
 ---
 
-# 13. Orchestrator
+# 13. Persistence, resume, and traces
 
-The Orchestrator is the control plane.
+Everything writes into a per-session trace directory
+(`trace_<session_id>/`):
 
-Its responsibilities:
+* per-agent and per-tool trace JSON (raw choices + token usage),
+* `InvestigationState` dumps after bootstrap and around every decision,
+* `report.md` at the end,
+* mirrored `run.log`.
 
-```text
-Orchestrator
-├── create investigation
-├── load/save state
-├── select next task
-├── dispatch agent
-├── validate result
-├── update state
-├── handle retries
-├── enforce budgets
-├── determine stopping conditions
-└── log events
-```
-
-The initial implementation can be very simple:
-
-```text
-state
-  ↓
-select agent
-  ↓
-run agent
-  ↓
-validate
-  ↓
-commit result
-  ↓
-select next agent
-```
-
-No separate processes are necessary initially.
+`ResumeInvestigationState.resume(path)` rebuilds a crashed investigation
+from a state dump: typed collections are re-validated as pydantic models,
+live tool instances are rebuilt from their stable `tool_name`s, and the
+`_decision_made` / `_decision_exec` flags make resume pick up exactly
+where the dump was taken (a pending decision is executed, not re-made).
 
 ---
 
-# 14. Agent vs Orchestrator
+# 14. Report generation
 
-This boundary should remain explicit.
+The ReportAgent only **proposes** the report (`ReportAgSchema`): title,
+abstract, introduction, one verdict + discussion per hypothesis (including
+rejected ones), alternative hypotheses, an evidence section, and a
+conclusion — all citing evidence by task ID inline (`[RT-001]`).
+
+The harness owns the final markdown document: section order, the final
+confidence values next to each verdict, a safety net for hypotheses the
+agent failed to discuss, and the References appendix mapping every citable
+evidence ID to the URLs its tool call returned. **The LLM never sees or
+invents URLs.**
+
+---
+
+# 15. Agent vs Orchestrator
 
 ```text
 Agent asks:
@@ -659,305 +475,36 @@ Agent asks:
 "What do I think?"
 "What evidence should we seek?"
 "What should challenge this?"
+"Is this evidence relevant, and to which hypothesis?"
+"What do we do next?"
 
 Orchestrator asks:
 
 "Who runs next?"
 "What state are we in?"
-"Is this task allowed?"
-"Did the result validate?"
-"Do we continue?"
-"When do we stop?"
+"Is this tool registered?"
+"Did the output validate?"
+"Which plans are still ACTIVE?"
+"Do we continue, force-finish, or stop?"
 ```
 
 ---
 
-# 15. Tasks and execution
-
-An agent should produce a **task**, not directly control infrastructure.
+# 16. CLI surface (current)
 
 ```text
-              Agent
-                │
-                ▼
-           ResearchTask
-                │
-                ▼
-          Task Executor
-                │
-                ▼
-              Tool
-                │
-                ▼
-             Result
-                │
-                ▼
-             State
+$ uv run app.py -q "Why is Infineon doing worse than NVIDIA?"
 ```
 
-This makes the system easy to:
-
-* trace,
-* retry,
-* replay,
-* evaluate,
-* test.
+* Runs the full investigation and writes `report.md` plus traces under the
+  session directory.
+* If the question needs clarification, the user is asked interactively
+  (Enter to proceed as-is).
+* Resume is available programmatically via
+  `ResumeInvestigationState.resume(<trace path>)`.
 
 ---
 
-# 16. Status / CLI surface
+# 17. The architecture in one sentence
 
-The first interface can be entirely CLI-based.
-
-```text
-$ wargs investigate "Why is Infineon doing worse than NVIDIA?"
-```
-
-Then:
-
-```text
-Investigation: 8c0c87b9
-
-Question
-────────────────────────────────
-Why is Infineon doing worse than NVIDIA?
-
-Hypotheses
-────────────────────────────────
-H1  Different market exposure       0.85
-H2  Market position / margins       0.75
-H3  Investor sentiment              0.65
-H4  Internal challenges              0.50
-
-Current task
-────────────────────────────────
-Investigating segment revenue data
-
-Evidence
-────────────────────────────────
-12 observations
-7 sources
-2 source families
-
-Status
-────────────────────────────────
-INVESTIGATING
-```
-
-Later:
-
-```text
-$ wargs inspect 8c0c87b9
-$ wargs resume 8c0c87b9
-$ wargs replay 8c0c87b9
-$ wargs evaluate dataset.yaml
-```
-
----
-
-# 17. Event log
-
-Every significant transition should be recorded.
-
-```text
-INVESTIGATION_CREATED
-        ↓
-HYPOTHESES_GENERATED
-        ↓
-RESEARCH_PLAN_CREATED
-        ↓
-TASK_STARTED
-        ↓
-TOOL_CALLED
-        ↓
-EVIDENCE_RECEIVED
-        ↓
-HYPOTHESIS_UPDATED
-        ↓
-CONTRADICTION_FOUND
-        ↓
-NEW_TASK_CREATED
-        ↓
-INVESTIGATION_COMPLETED
-```
-
-This gives you a complete audit trail.
-
-Conceptually:
-
-```text
-event log
-────────────────────────────────────
-08:44 investigation_created
-08:45 hypotheses_generated
-08:45 research_plan_created
-08:46 task_started
-08:46 web_search
-08:46 evidence_received
-08:47 hypothesis_updated
-...
-```
-
----
-
-# 18. Reliability boundaries
-
-Eventually the harness should own:
-
-```text
-                  SAFETY / RELIABILITY
-                         │
-       ┌─────────────────┼─────────────────┐
-       ▼                 ▼                 ▼
-   Validation          Budgets          Retries
-       │                 │                 │
-       ▼                 ▼                 ▼
- Structured           Tool calls        Model calls
- outputs              / time            / failures
-```
-
-An agent should never be able to silently:
-
-* invent a tool,
-* bypass validation,
-* mutate state directly,
-* exceed its budget,
-* skip provenance,
-* declare the investigation finished arbitrarily.
-
----
-
-# 19. Main data flow
-
-```text
-USER QUESTION
-      │
-      ▼
-InvestigationState
-      │
-      ▼
-HypothesisAgent
-      │
-      ▼
-Hypotheses + predictions
-      │
-      ▼
-ResearchPlanner
-      │
-      ▼
-ResearchTasks
-      │
-      ▼
-ResearchExecutor
-      │
-      ▼
-Raw observations
-      │
-      ▼
-Evidence / Provenance
-      │
-      ├─────────────────────┐
-      ▼                     ▼
-HypothesisUpdater    ContradictionAgent
-      │                     │
-      └──────────┬──────────┘
-                 ▼
-       Updated InvestigationState
-                 │
-                 ▼
-          Next-step decision
-                 │
-          ┌──────┴───────┐
-          ▼              ▼
-      investigate       stop
-                           │
-                           ▼
-                      synthesis
-```
-
----
-
-# 20. The architecture in one sentence
-
-> **Wargs is a stateful agent runtime in which constrained agents generate, investigate, challenge, and revise competing hypotheses, while a deterministic orchestrator controls state, tool execution, provenance, budgets, and the investigation lifecycle.**
-
----
-
-# 21. Recommended implementation order
-
-```text
-1. HypothesisAgent
-       ✓ already built
-
-2. InvestigationState
-       ↓
-
-3. Orchestrator
-       ↓
-
-4. ResearchPlanner
-       ✓ already built
-
-5. ResearchTask / ResearchResult
-       ↓
-
-6. ResearchExecutor
-       ↓
-
-7. Evidence + Provenance
-       ↓
-
-8. HypothesisUpdater
-       ↓
-
-9. ContradictionAgent
-       ↓
-
-10. Stop / verification logic
-       ↓
-
-11. CLI status / replay
-       ↓
-
-12. Evaluation harness
-```
-
-The **minimum viable autonomous loop** is therefore:
-
-```text
-Hypothesize
-    ↓
-Plan
-    ↓
-Research
-    ↓
-Update
-```
-
-Then the distinctive part of Wargs becomes:
-
-```text
-                 ┌───────────────┐
-                 │   Hypothesis  │
-                 └───────┬───────┘
-                         │
-                         ▼
-                 ┌───────────────┐
-                 │    Research   │
-                 └───────┬───────┘
-                         │
-                         ▼
-                 ┌───────────────┐
-                 │    Update     │
-                 └───────┬───────┘
-                         │
-                         ▼
-                 ┌───────────────┐
-                 │  Contradict   │
-                 └───────┬───────┘
-                         │
-                         └──────────→ repeat
-```
-
-That is the **architectural core** worth keeping in your reference notes.
-
+> **Wargs is a stateful agent runtime in which constrained agents generate, investigate, challenge, and revise competing hypotheses, while a deterministic orchestrator controls state, tool execution, plan lifecycle, confidence updates, budgets, and the investigation lifecycle.**

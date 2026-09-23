@@ -14,8 +14,10 @@ Given a question about a real-world phenomenon, Wargs:
 
 The central idea: **Wargs does not optimize for producing a confident answer. It optimizes for finding explanations that survive attempts to disprove them.**
 
-See [architecture.md](architecture.md) for the full architectural reference and
-[docs/investigation-flow.md](docs/investigation-flow.md) for the investigation flow.
+See [architecture.md](architecture.md) for the architectural reference (as
+implemented), [docs/investigation-flow.md](docs/investigation-flow.md) for the
+investigation flow, and [docs/aspirations.md](docs/aspirations.md) for the
+not-yet-implemented design ideas.
 
 ## Requirements
 
